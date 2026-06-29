@@ -1,0 +1,46 @@
+{
+  "documents": [
+    {
+      "source_id": "mock-capability-001",
+      "title": "Approved Capability Overview",
+      "source_type": "local_mock",
+      "topics": ["capability", "services", "transformation", "proposal"],
+      "content": "TCS proposal responses should describe capabilities using approved service descriptions, relevant delivery experience, and account-specific context validated by the proposal team. Drafts must avoid unsupported claims and should identify when SME confirmation is needed."
+    },
+    {
+      "source_id": "mock-delivery-001",
+      "title": "Delivery Methodology Summary",
+      "source_type": "local_mock",
+      "topics": ["delivery", "methodology", "governance", "transition"],
+      "content": "Approved delivery responses may reference structured transition planning, governance forums, risk and issue management, quality checkpoints, and continuous improvement practices. Final timelines, staffing levels, and service commitments must be validated for the specific opportunity."
+    },
+    {
+      "source_id": "mock-security-001",
+      "title": "Security and Compliance Response Guidance",
+      "source_type": "local_mock",
+      "topics": ["security", "compliance", "data protection", "controls"],
+      "content": "Security responses should be grounded in approved security documentation. Common proposal themes include role-based access control, secure development practices, incident management processes, data protection controls, audit support, and compliance alignment where supported by source material."
+    },
+    {
+      "source_id": "mock-bcp-001",
+      "title": "Business Continuity and Resilience Guidance",
+      "source_type": "local_mock",
+      "topics": ["business continuity", "resilience", "disaster recovery", "bcp"],
+      "content": "Business continuity responses should describe governance for continuity planning, disaster recovery coordination, service resilience, incident communication, and periodic validation exercises when these are supported by approved documentation."
+    },
+    {
+      "source_id": "mock-resourcing-001",
+      "title": "Staffing and Resourcing Response Guidance",
+      "source_type": "local_mock",
+      "topics": ["staffing", "resourcing", "skills", "knowledge transfer"],
+      "content": "Resourcing responses may describe role-based team structures, skill alignment, onboarding, knowledge transfer, and governance for capacity management. Named individuals, rates, commitments, and final staffing models require proposal leadership approval."
+    },
+    {
+      "source_id": "mock-architecture-001",
+      "title": "Solution Architecture Response Guidance",
+      "source_type": "local_mock",
+      "topics": ["architecture", "cloud", "technology", "solution"],
+      "content": "Architecture responses should connect the proposed solution to approved reference patterns, integration principles, security requirements, observability, scalability, maintainability, and client-specific non-functional requirements. The draft should avoid prescribing unvalidated product choices."
+    }
+  ]
+}

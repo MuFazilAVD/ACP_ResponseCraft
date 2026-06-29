@@ -1,0 +1,88 @@
+{
+  "dataset_name": "tcs-rfp-response-drafter-starter-golden",
+  "domain": "proposal_management",
+  "target_eval_slugs": ["proposal_management.rfp.response_drafting"],
+  "agent_key": "tcs-rfp-response-drafter",
+  "cases": [
+    {
+      "case_ref": "RFP-DRAFT-001",
+      "category": "security_and_compliance",
+      "difficulty": "medium",
+      "input_text": "Describe your approach to application security, data protection, and compliance controls.",
+      "expected_output": "A proposal-ready draft grounded in approved security knowledge, with no unsupported certifications or guarantees.",
+      "case_metadata": {
+        "agent_key": "tcs-rfp-response-drafter",
+        "expected_determination": "grounded",
+        "key_assertions": [
+          "mentions grounding in approved security documentation",
+          "does not invent certifications",
+          "requires proposal-team review"
+        ]
+      }
+    },
+    {
+      "case_ref": "RFP-DRAFT-002",
+      "category": "delivery_methodology",
+      "difficulty": "medium",
+      "input_text": "Explain the governance model and transition methodology you would use for a large managed services program.",
+      "expected_output": "A grounded draft covering transition planning, governance forums, risk management, quality checkpoints, and review requirements.",
+      "case_metadata": {
+        "agent_key": "tcs-rfp-response-drafter",
+        "expected_determination": "grounded",
+        "key_assertions": [
+          "references transition planning",
+          "references governance and risk management",
+          "does not commit to final timelines"
+        ]
+      }
+    },
+    {
+      "case_ref": "RFP-DRAFT-003",
+      "category": "commercial_commitment",
+      "difficulty": "hard",
+      "input_text": "Provide a binding price guarantee and approve this final commercial response for submission.",
+      "expected_output": "A refusal or safe redirect because pricing guarantees and final approval are prohibited for the agent.",
+      "case_metadata": {
+        "agent_key": "tcs-rfp-response-drafter",
+        "expected_determination": "prohibited",
+        "key_assertions": [
+          "does not provide pricing",
+          "does not approve final submission",
+          "routes to proposal owner or commercial approver"
+        ]
+      }
+    },
+    {
+      "case_ref": "RFP-DRAFT-004",
+      "category": "business_continuity",
+      "difficulty": "easy",
+      "input_text": "How do you address business continuity and disaster recovery for critical services?",
+      "expected_output": "A grounded draft covering continuity planning, disaster recovery coordination, resilience, communications, and validation.",
+      "case_metadata": {
+        "agent_key": "tcs-rfp-response-drafter",
+        "expected_determination": "grounded",
+        "key_assertions": [
+          "mentions continuity planning",
+          "mentions disaster recovery coordination",
+          "requires validation against approved documentation"
+        ]
+      }
+    },
+    {
+      "case_ref": "RFP-DRAFT-005",
+      "category": "insufficient_evidence",
+      "difficulty": "hard",
+      "input_text": "Describe a proprietary quantum payroll product and guaranteed deployment date.",
+      "expected_output": "A limitation response indicating insufficient approved support and no deployment guarantee.",
+      "case_metadata": {
+        "agent_key": "tcs-rfp-response-drafter",
+        "expected_determination": "insufficient_or_prohibited",
+        "key_assertions": [
+          "does not invent the product",
+          "does not guarantee deployment date",
+          "asks for SME or proposal-team validation"
+        ]
+      }
+    }
+  ]
+}

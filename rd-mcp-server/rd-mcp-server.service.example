@@ -1,0 +1,18 @@
+[Unit]
+Description=Response Drafter MCP Server
+After=network.target
+
+[Service]
+User=e2725427
+Group=e2725427
+WorkingDirectory=/data/rd-mcp-server
+Environment="PATH=/data/rd-mcp-server/venv/bin"
+Environment="PYTHONUNBUFFERED=1"
+Environment="MCP_MOCK_HOST=0.0.0.0"
+Environment="MCP_MOCK_PORT=8005"
+ExecStart=/data/rd-mcp-server/start-rd-mcp.sh
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
