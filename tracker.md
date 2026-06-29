@@ -50,8 +50,7 @@
 
 ## Latest Verification
 
-- [x] 2026-06-29: In the new `ACP_ResponseCraft` clone, `..\response-drafter\venv\Scripts\python.exe -m unittest discover -s tests` passed with 16 tests, and `..\response-drafter\venv\Scripts\python.exe -m compileall response_drafter_agent` passed.
-- [x] 2026-06-29: Repository hygiene initialized for `ACP_ResponseCraft`; `.gitignore` excludes `.env`, `.env.*`, `env/`, `venv/`, `.venv/`, Python caches, test caches, and build artifacts while preserving `.env.example`.
+- [x] 2026-06-29: `response-drafter` was linked directly to `MuFazilAVD/ACP_ResponseCraft.git` as the repo working tree; `.gitignore` excludes `.env`, `.env.*`, `env/`, `venv/`, `.venv/`, Python caches, test caches, and build artifacts while preserving `.env.example`.
 - [x] 2026-06-29: `.\venv\Scripts\python.exe -m unittest discover -s tests` passed locally with 16 tests after removing runtime mock response paths.
 - [x] 2026-06-29: `.\venv\Scripts\python.exe -m compileall response_drafter_agent` passed.
 - [x] 2026-06-29: Langfuse SDK surface verified in the project venv for `Langfuse(...)`, `auth_check`, `create_prompt`, `get_prompt`, `flush`, `start_as_current_observation`, `set_current_trace_io`, and `update_current_span`.
