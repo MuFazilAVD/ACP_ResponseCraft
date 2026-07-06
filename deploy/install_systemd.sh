@@ -2,7 +2,7 @@
 set -euo pipefail
 
 APP_NAME="${APP_NAME:-response-drafter}"
-PORT="${PORT:-8005}"
+PORT="${PORT:-8006}"
 PYTHON_BIN="${PYTHON_BIN:-python3.14}"
 WORKERS="${WORKERS:-4}"
 

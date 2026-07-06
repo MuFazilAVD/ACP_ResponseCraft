@@ -56,7 +56,7 @@ The implementation compiles a LangGraph state graph when `langgraph` is installe
 
 Primary governed tool: `proposal-knowledge-mcp` via the ACP MCP gateway.
 
-The temporary tool is `search_proposal_knowledge`, hosted from `rd-mcp-server/server.py` over Streamable HTTP at `/mcp`. Its input is stable now: `query`, `top_k`, optional `filters`, optional `metadata_filters`, `min_score`, and `include_content`. The future hybrid retrieval implementation can change ranking internals without changing this agent-facing contract.
+The temporary tool is `search_proposal_knowledge`, hosted from `rd-mcp-server/server.py`. The runtime default uses the hosted HTTP compatibility bridge at `/tools/search_proposal_knowledge` and sends the `/contract` schema body with `input.query`. Local Streamable HTTP development still supports `/mcp` and richer arguments such as `top_k`, optional `filters`, optional `metadata_filters`, `min_score`, and `include_content`.
 
 Runtime local mock retrieval is disabled. Production and pre-production must register the MCP server/resource and compile the requested entitlement profile before running with ACP gateway enforcement enabled. If retrieval fails or returns mock-marked evidence, the error is passed to the LLM so the draft clearly states that approved supporting knowledge could not be retrieved.
 
@@ -88,7 +88,7 @@ Goal: collect the secret values that should not be committed.
 
 - Set real `.env` values for LLM, Langfuse, OTLP, ACP/MCP, and optional enterprise API keys.
 - Change model names, URLs, prompt labels, transports, or generation defaults only in `response_drafter_agent/settings.py`.
-- Confirm the service host URL ACP will call, for example `http://your-agent-host:8110`.
+- Confirm the service host URL ACP will call, for example `http://your-agent-host:8006`.
 
 Exit criteria: the service can start with code-owned runtime defaults and no required secret is missing.
 
@@ -96,7 +96,7 @@ Exit criteria: the service can start with code-owned runtime defaults and no req
 
 Goal: make ACP aware of the internal HTTP AEI service.
 
-- Start the service with Uvicorn on the chosen host and port.
+- Start the service with Gunicorn/Uvicorn on the chosen host and port.
 - Verify `/health`, `/config`, `/invoke`, and `/prompts/sync` from the same network segment ACP will use.
 - Register the agent URL with ACP using `POST /api/agents/register`.
 

@@ -39,7 +39,7 @@ class InvokeRequest(BaseModel):
     query: str = Field(min_length=1, max_length=20000)
     context: dict[str, Any] | None = None
     conversation_id: str | None = None
-    model_override: str | None = None
+    # model_override: str | None = None
     temperature_override: float | None = Field(default=None, ge=0.0, le=2.0)
     top_p_override: float | None = Field(default=None, ge=0.0, le=1.0)
     max_tokens_override: int | None = Field(default=None, ge=1, le=32000)

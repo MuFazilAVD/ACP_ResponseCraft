@@ -59,6 +59,21 @@ class KnowledgeRetriever:
 
         evidence, error = await self._retrieve_from_mcp(request)
         latency_ms = int((time.perf_counter() - started) * 1000)
+        tool_error = _tool_error_from_evidence(evidence)
+        if error is None and tool_error:
+            return [], ToolCall(
+                tool_name=self.mcp_tool,
+                source="mcp",
+                target=self.mcp_url,
+                status="error",
+                latency_ms=latency_ms,
+                request=request,
+                summary={
+                    "result_count": len(evidence),
+                    "sources": [item.source_id for item in evidence],
+                },
+                error=tool_error,
+            )
         if error is None and _contains_mock_evidence(evidence):
             return [], ToolCall(
                 tool_name=self.mcp_tool,
@@ -108,11 +123,7 @@ class KnowledgeRetriever:
         if self.mcp_api_key:
             headers["Authorization"] = f"Bearer {self.mcp_api_key}"
 
-        payload = {
-            "tool": self.mcp_tool,
-            "arguments": request,
-            "metadata": {"agent_key": "tcs-rfp-response-drafter"},
-        }
+        payload = {"input": {"query": request["query"]}}
         try:
             async with httpx.AsyncClient(timeout=30.0) as client:
                 response = await client.post(self.mcp_url, headers=headers, json=payload)
@@ -169,6 +180,20 @@ class KnowledgeRetriever:
                 or data.get("matches")
                 or []
             )
+            if isinstance(rows, str):
+                rows = [
+                    {
+                        "source_id": "mcp-text",
+                        "title": str(data.get("tool") or "mcp-text"),
+                        "content": rows,
+                        "score": 1.0,
+                        "metadata": {
+                            key: value
+                            for key, value in data.items()
+                            if key != "results"
+                        },
+                    }
+                ]
         elif isinstance(data, list):
             rows = data
         else:
@@ -211,6 +236,14 @@ def _contains_mock_evidence(evidence: list[Evidence]) -> bool:
         if any("mock" in value.lower() for value in values):
             return True
     return False
+
+
+def _tool_error_from_evidence(evidence: list[Evidence]) -> str | None:
+    for item in evidence:
+        content = item.content.strip()
+        if content.startswith("Error executing tool"):
+            return content[:500]
+    return None
 
 
 def _extract_mcp_content(data: dict[str, Any]) -> Any:

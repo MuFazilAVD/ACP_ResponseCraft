@@ -7,10 +7,25 @@ This is the temporary mock contract for `proposal-knowledge-mcp`. It intentional
 - MCP server: `proposal-knowledge-mcp`
 - Tool name: `search_proposal_knowledge`
 - Capability entitlement: `capability:rfp_knowledge.search`
-- Default hosted MCP endpoint: `https://d2brdeqy144bwg.cloudfront.net/poc185/acp-mcp/rd-mcp-server/mcp`
+- Default hosted bridge endpoint: `https://d2brdeqy144bwg.cloudfront.net/poc185/acp-mcp/rd-mcp-server/tools/search_proposal_knowledge`
+- Hosted contract endpoint: `https://d2brdeqy144bwg.cloudfront.net/poc185/acp-mcp/rd-mcp-server/contract`
 - Local development MCP endpoint: `http://localhost:8121/mcp`
 
 ## Input
+
+Hosted bridge request:
+
+```json
+{
+  "input": {
+    "query": "Describe your approach to application security controls."
+  }
+}
+```
+
+Local Streamable HTTP and local bridge development also support the richer MCP
+arguments shape below, but the hosted `/contract` currently advertises only
+`input.query`:
 
 ```json
 {
@@ -30,9 +45,9 @@ This is the temporary mock contract for `proposal-knowledge-mcp`. It intentional
 
 Required:
 
-- `query`: natural-language RFP question or search phrase.
+- `input.query`: natural-language RFP question or search phrase.
 
-Optional:
+Optional for local/richer MCP implementations:
 
 - `top_k`: integer from 1 to 10; default `5`.
 - `filters.intent`: retrieval hint from the agent intent classifier.
@@ -44,6 +59,19 @@ Optional:
 - `include_content`: whether to return full mock content or a short snippet.
 
 ## Output
+
+Hosted bridge response:
+
+```json
+{
+  "tool": "search_proposal_knowledge",
+  "results": "TCS's annual revenue is USD 25.7 billion."
+}
+```
+
+The agent normalizes a hosted string `results` value into one evidence item.
+Local Streamable HTTP and local bridge development may return richer ranked
+results:
 
 ```json
 {

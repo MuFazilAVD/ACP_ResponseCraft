@@ -1,4 +1,3 @@
-import json
 import os
 import sys
 import tempfile
@@ -42,8 +41,10 @@ from response_drafter_agent.settings import (
 class FakeRetriever:
     def __init__(self, *, fail: bool = False) -> None:
         self.fail = fail
+        self.calls = []
 
     async def retrieve(self, query, *, top_k=5, filters=None):
+        self.calls.append({"query": query, "top_k": top_k, "filters": filters or {}})
         if self.fail:
             return [], ToolCall(
                 tool_name="search_proposal_knowledge",
@@ -75,8 +76,10 @@ class FakeRetriever:
 
 
 class FakeLLM:
-    def __init__(self, *, fail: bool = False) -> None:
+    def __init__(self, *, fail: bool = False, json_wrapped: bool = False, blank: bool = False) -> None:
         self.fail = fail
+        self.json_wrapped = json_wrapped
+        self.blank = blank
         self.calls = []
 
     async def draft(self, **kwargs):
@@ -94,6 +97,18 @@ class FakeLLM:
                 "I cannot draft a pricing, legal, contractual, or final-approval commitment. Please route this request to the proposal owner.",
                 kwargs["model"],
                 TokenUsage(input_tokens=10, output_tokens=20, total_tokens=30),
+            )
+        if self.json_wrapped:
+            return (
+                '```json\n{"question":"Describe your approach to application security and compliance controls.","intent":"security_and_compliance","draft_answer":"TCS can address the security and compliance question using approved guidance on governance, access control, monitoring, and compliance alignment."}\n```',
+                kwargs["model"],
+                TokenUsage(input_tokens=10, output_tokens=20, total_tokens=30),
+            )
+        if self.blank:
+            return (
+                "   ",
+                kwargs["model"],
+                TokenUsage(input_tokens=10, output_tokens=1, total_tokens=11),
             )
         return (
             "TCS can address the security and compliance question using approved guidance on governance, access control, monitoring, and compliance alignment. This draft remains subject to proposal-team and SME review.",
@@ -214,17 +229,49 @@ class AEIEndpointTests(unittest.TestCase):
         self.assertTrue(payload["tool_calls"])
         self.assertEqual(payload["tool_calls"][0]["source"], "mcp")
         self.assertIn("skills_loaded", payload)
+        self.assertIn("TCS can address the security and compliance question", payload["response"])
+        self.assertFalse(payload["response"].lstrip().startswith("{"))
+        self.assertNotIn("draft_answer", payload["response"])
 
-        draft = json.loads(payload["response"])
-        self.assertEqual(draft["question"], "Describe your approach to application security and compliance controls.")
-        self.assertEqual(draft["intent"], "security_and_compliance")
-        self.assertIn(draft["grounding_status"], {"grounded", "limited_evidence"})
-        self.assertTrue(draft["review_required"])
-        self.assertTrue(draft["evidence_sources"])
+    def test_invoke_unwraps_accidental_json_draft_answer(self):
+        agent_module.agent.knowledge = FakeRetriever()
+        agent_module.agent.llm = FakeLLM(json_wrapped=True)
+        response = self.client.post(
+            "/invoke",
+            json={
+                "query": "Describe your approach to application security and compliance controls.",
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(
+            payload["response"],
+            "TCS can address the security and compliance question using approved guidance on governance, access control, monitoring, and compliance alignment.",
+        )
+        self.assertNotIn("```", payload["response"])
+        self.assertNotIn("draft_answer", payload["response"])
+
+    def test_invoke_falls_back_to_evidence_when_llm_returns_blank(self):
+        agent_module.agent.knowledge = FakeRetriever()
+        agent_module.agent.llm = FakeLLM(blank=True)
+        response = self.client.post(
+            "/invoke",
+            json={
+                "query": "Describe your approach to application security and compliance controls.",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertIn("TCS describes security controls", payload["response"])
+        self.assertNotEqual(payload["response"], "")
+        self.assertEqual(payload["token_usage"]["output_tokens"], 1)
 
     def test_invoke_blocks_prohibited_authority(self):
-        agent_module.agent.knowledge = FakeRetriever()
-        agent_module.agent.llm = FakeLLM()
+        fake_retriever = FakeRetriever()
+        fake_llm = FakeLLM()
+        agent_module.agent.knowledge = fake_retriever
+        agent_module.agent.llm = fake_llm
         response = self.client.post(
             "/invoke",
             json={
@@ -232,10 +279,45 @@ class AEIEndpointTests(unittest.TestCase):
             },
         )
         self.assertEqual(response.status_code, 200)
-        draft = json.loads(response.json()["response"])
-        self.assertEqual(draft["authority_status"], "prohibited")
-        self.assertIn("cannot draft", draft["draft_answer"].lower())
-        self.assertTrue(draft["limitations"])
+        payload = response.json()
+        self.assertIn("cannot draft", payload["response"].lower())
+        self.assertEqual(payload["tool_calls"], [])
+        self.assertEqual(fake_retriever.calls, [])
+        self.assertEqual(fake_llm.calls, [])
+
+    def test_out_of_scope_request_skips_retrieval_and_generation(self):
+        fake_retriever = FakeRetriever()
+        fake_llm = FakeLLM()
+        agent_module.agent.knowledge = fake_retriever
+        agent_module.agent.llm = fake_llm
+        response = self.client.post(
+            "/invoke",
+            json={"query": "who won the world cup in 2006"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertIn("outside that scope", payload["response"])
+        self.assertEqual(payload["tool_calls"], [])
+        self.assertEqual(fake_retriever.calls, [])
+        self.assertEqual(fake_llm.calls, [])
+
+    def test_greeting_request_skips_retrieval_and_generation(self):
+        fake_retriever = FakeRetriever()
+        fake_llm = FakeLLM()
+        agent_module.agent.knowledge = fake_retriever
+        agent_module.agent.llm = fake_llm
+        response = self.client.post(
+            "/invoke",
+            json={"query": "Hi"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertIn("Please share the RFP question", payload["response"])
+        self.assertEqual(payload["tool_calls"], [])
+        self.assertEqual(fake_retriever.calls, [])
+        self.assertEqual(fake_llm.calls, [])
 
     def test_force_mock_context_is_rejected(self):
         response = self.client.post(
@@ -248,7 +330,7 @@ class AEIEndpointTests(unittest.TestCase):
         self.assertEqual(response.status_code, 400)
         self.assertIn("force_mock is no longer supported", response.json()["detail"])
 
-    def test_retrieval_error_is_visible_and_passed_to_llm(self):
+    def test_retrieval_error_returns_deterministic_dependency_message(self):
         fake_llm = FakeLLM()
         agent_module.agent.knowledge = FakeRetriever(fail=True)
         agent_module.agent.llm = fake_llm
@@ -260,11 +342,8 @@ class AEIEndpointTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         payload = response.json()
         self.assertEqual(payload["tool_calls"][0]["status"], "error")
-        self.assertTrue(fake_llm.calls[0]["system_errors"])
-        draft = json.loads(payload["response"])
-        self.assertEqual(draft["grounding_status"], "retrieval_error")
-        self.assertIn("unable to retrieve", draft["draft_answer"].lower())
-        self.assertFalse(draft["evidence_sources"])
+        self.assertEqual(fake_llm.calls, [])
+        self.assertIn("unable to retrieve", payload["response"].lower())
 
     def test_llm_error_surfaces_as_invoke_failure(self):
         agent_module.agent.knowledge = FakeRetriever()

@@ -36,9 +36,9 @@ class MockMCPToolTests(unittest.TestCase):
 
         self.assertEqual(
             retriever.mcp_url,
-            "https://d2brdeqy144bwg.cloudfront.net/poc185/acp-mcp/rd-mcp-server/mcp",
+            "https://d2brdeqy144bwg.cloudfront.net/poc185/acp-mcp/rd-mcp-server/tools/search_proposal_knowledge",
         )
-        self.assertEqual(retriever.mcp_transport, "streamable_http")
+        self.assertEqual(retriever.mcp_transport, "http_bridge")
 
     def test_retriever_rejects_mock_marked_evidence(self):
         async def fake_retrieve_from_mcp(_request):
@@ -59,6 +59,29 @@ class MockMCPToolTests(unittest.TestCase):
         self.assertEqual(evidence, [])
         self.assertEqual(tool_call.status, "error")
         self.assertEqual(tool_call.error, "MockKnowledgeSourceReturned")
+
+    def test_retriever_rejects_tool_error_text_as_evidence(self):
+        async def fake_retrieve_from_mcp(_request):
+            return [
+                Evidence(
+                    source_id="mcp-text",
+                    title="mcp-text",
+                    content=(
+                        "Error executing tool search_proposal_knowledge: "
+                        "retrieve_and_generate() got an unexpected keyword argument 'query'"
+                    ),
+                    score=1.0,
+                    metadata={"source_id": "mcp-text"},
+                )
+            ], None
+
+        retriever = KnowledgeRetriever()
+        retriever._retrieve_from_mcp = fake_retrieve_from_mcp
+        evidence, tool_call = asyncio.run(retriever.retrieve("What is the annual revenue of TCS?"))
+
+        self.assertEqual(evidence, [])
+        self.assertEqual(tool_call.status, "error")
+        self.assertIn("Error executing tool search_proposal_knowledge", tool_call.error)
 
     def test_mock_search_contract(self):
         payload = search_mock_knowledge(
@@ -82,7 +105,7 @@ class MockMCPToolTests(unittest.TestCase):
             "/tools/search_proposal_knowledge",
             json={
                 "tool": "search_proposal_knowledge",
-                "arguments": {
+                "input": {
                     "query": "Describe security controls and compliance.",
                     "top_k": 2,
                     "filters": {"intent": "security_and_compliance"},

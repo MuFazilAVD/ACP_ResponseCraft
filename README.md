@@ -6,11 +6,13 @@ ACP/AEI-conformant RAG + Tools agent for drafting grounded answers to RFP questi
 
 - Accepts an individual RFP question through `POST /invoke`.
 - Classifies intent and information needs.
+- Handles greetings, unrelated factual questions, and prohibited authority requests deterministically before retrieval.
 - Retrieves approved proposal knowledge through a governed MCP endpoint when configured.
 - Uses the standard ACP LiteLLM-compatible Gemini gateway by default.
 - Drafts an answer for proposal-team and SME review.
 - Blocks pricing, legal, contractual, commercial commitment, and final submission authority.
-- Returns AEI prompt metadata, token usage, trace id, tool calls, and skills loaded.
+- Returns the user-facing draft answer in the AEI `response` field, with prompt metadata, token usage, trace id, tool calls, and skills loaded in separate AEI fields.
+- Logs the structured debug payload for trace/review use instead of rendering it to the UI.
 - Does not expose runtime mock drafting or local mock retrieval. If LLM, MCP, or another dependency fails, the response surfaces the failure instead of pretending a grounded draft was produced.
 
 ## Local Setup
@@ -33,13 +35,29 @@ The default LLM is `GLM-4.7-Flash` through `https://d2brdeqy144bwg.cloudfront.ne
 uvicorn response_drafter_agent.main:app --host 0.0.0.0 --port 8110
 ```
 
+## Systemd
+
+For the server deployment under `/data/acp-agents/response-drafter`, install the
+provided service example to run Gunicorn/Uvicorn on port `8006`:
+
+```bash
+sudo cp deploy/response-drafter.service.example /etc/systemd/system/response-drafter.service
+sudo systemctl daemon-reload
+sudo systemctl enable --now response-drafter.service
+sudo systemctl status response-drafter.service
+curl http://localhost:8006/health
+```
+
+If the cloned folder name differs on the server, update `WorkingDirectory`,
+`PATH`, and `ExecStart` in the copied service file before starting it.
+
 Register the internal HTTP runtime with ACP after the service is reachable:
 
 ```powershell
 Invoke-RestMethod -Method Post `
   -Uri "https://your-acp.example.com/api/agents/register" `
   -ContentType "application/json" `
-  -Body '{"endpoint_url":"http://your-agent-host:8110"}'
+  -Body '{"endpoint_url":"http://your-agent-host:8006"}'
 ```
 
 ## AEI Endpoints
@@ -57,6 +75,8 @@ Invoke-RestMethod -Method Post `
   -ContentType "application/json" `
   -Body '{"query":"Describe your approach to security controls and compliance."}'
 ```
+
+For the systemd deployment, call port `8006` instead.
 
 ## PromptHub
 
@@ -84,15 +104,15 @@ Local contract-test MCP endpoint:
 http://localhost:8121/mcp
 ```
 
-By default, the response drafter points at the hosted MCP endpoint:
+By default, the response drafter points at the hosted compatibility bridge endpoint:
 
 ```text
-https://d2brdeqy144bwg.cloudfront.net/poc185/acp-mcp/rd-mcp-server/mcp
+https://d2brdeqy144bwg.cloudfront.net/poc185/acp-mcp/rd-mcp-server/tools/search_proposal_knowledge
 ```
 
-The default hosted MCP endpoint, transport, and tool name are tracked in `response_drafter_agent/settings.py`. Change those constants, not `.env`, when moving between MCP endpoints so the migration is reviewable. Use `http_bridge` only for gateway adapters that expose the compatibility bridge payload. The requested entitlement profile is declared in `/config` and documented in `entitlements.md`.
+The default hosted MCP endpoint, transport, and tool name are tracked in `response_drafter_agent/settings.py`. Change those constants, not `.env`, when moving between MCP endpoints so the migration is reviewable. The hosted bridge follows the `/contract` schema and is called with a JSON body containing `input.query`. The requested entitlement profile is declared in `/config` and documented in `entitlements.md`.
 
-The invoke path rejects `context.force_mock` and local mock retrieval. If an MCP response is marked as mock evidence, including the contract-test server's mock data, the agent treats it as a dependency error and asks the LLM to explain that approved knowledge could not be retrieved.
+The invoke path rejects `context.force_mock` and local mock retrieval. If an MCP response is marked as mock evidence, including the contract-test server's mock data, the agent treats it as a dependency error and returns a deterministic dependency message without asking the LLM to draft around missing approved knowledge.
 
 Before evaluation or pre-production, install `langchain-openai`, reconcile and compile entitlements, then test with:
 

@@ -21,6 +21,21 @@ PII_PATTERNS = [
     re.compile(r"\b(?:\d[ -]*?){13,16}\b"),
 ]
 
+GREETING_PATTERN = re.compile(
+    r"^\s*(hi|hello|hey|good morning|good afternoon|good evening|thanks|thank you)\s*[.!?]*\s*$",
+    re.I,
+)
+
+PROPOSAL_SCOPE_PATTERN = re.compile(
+    r"\b("
+    r"tcs|rfp|rfi|proposal|tender|bid|response|draft|capability|capabilities|"
+    r"security|cyber|cybersecurity|compliance|iso|soc|data protection|policy|controls|"
+    r"methodology|delivery|transition|business continuity|disaster recovery|bcp|resilience|"
+    r"staffing|resourcing|team|skills|architecture|cloud|technology|solution|managed service"
+    r")\b",
+    re.I,
+)
+
 
 class Constitution:
     def __init__(self, path: Path) -> None:
@@ -122,6 +137,45 @@ def infer_intent(query: str) -> str:
     if any(token in lowered for token in ("architecture", "cloud", "technology", "solution")):
         return "solution_architecture"
     return "general_capability"
+
+
+def classify_request_scope(query: str, intent: str) -> dict[str, Any]:
+    stripped = query.strip()
+    if GREETING_PATTERN.match(stripped):
+        return {
+            "scope_status": "small_talk",
+            "skip_retrieval": True,
+            "skip_generation": True,
+            "review_required": False,
+            "deterministic_answer": (
+                "Hello. I can help draft RFP and proposal responses using approved TCS "
+                "knowledge. Please share the RFP question you want drafted."
+            ),
+            "limitations": [],
+        }
+
+    if intent != "general_capability" or PROPOSAL_SCOPE_PATTERN.search(stripped):
+        return {
+            "scope_status": "in_scope",
+            "skip_retrieval": False,
+            "skip_generation": False,
+            "review_required": True,
+            "deterministic_answer": None,
+            "limitations": [],
+        }
+
+    return {
+        "scope_status": "outside_agent_scope",
+        "skip_retrieval": True,
+        "skip_generation": True,
+        "review_required": False,
+        "deterministic_answer": (
+            "I can only help with RFP and proposal-response drafting grounded in approved "
+            "TCS knowledge. This request is outside that scope, so I cannot answer it here. "
+            "Please provide an RFP question or route the item to the appropriate source."
+        ),
+        "limitations": ["Request is outside the response drafter scope; retrieval was not performed."],
+    }
 
 
 def redact_sensitive_text(text: str) -> str:

@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import json
+import logging
 import time
 from typing import Any
 
 from fastapi import FastAPI, HTTPException
 
-from .governance import Constitution, infer_intent, redact_sensitive_text
+from .governance import Constitution, classify_request_scope, infer_intent, redact_sensitive_text
 from .graph import build_graph
 from .knowledge import KnowledgeRetriever
 from .langfuse_integration import LangfuseTelemetry, usage_details_from_token_usage
@@ -31,6 +32,9 @@ from .settings import (
     AgentSettings,
 )
 from .telemetry import Telemetry
+
+
+logger = logging.getLogger(__name__)
 
 
 class ResponseDrafterAgent:
@@ -96,7 +100,8 @@ class ResponseDrafterAgent:
         context = body.context or {}
         if context.get("force_mock") is not None:
             raise ValueError("context.force_mock is no longer supported; invoke uses live configured services only.")
-        requested_model = body.model_override or self.settings.default_model
+        # requested_model = body.model_override or self.settings.default_model
+        requested_model = "GLM-4.7-Flash"
         redacted_query = redact_sensitive_text(body.query).strip()
         system_prompt_override = context.get("system_prompt_override")
         if system_prompt_override is not None:
@@ -198,6 +203,7 @@ class ResponseDrafterAgent:
                 "prompt_source": response.prompt_source,
                 "authority_status": final_state.get("authority", {}).get("authority_status"),
                 "grounding_status": final_state.get("grounding", {}).get("grounding_status"),
+                "scope_status": final_state.get("scope", {}).get("scope_status"),
                 "response": response.response,
             }
             langfuse_span.update(
@@ -221,14 +227,22 @@ class ResponseDrafterAgent:
         ):
             question = redact_sensitive_text(state["query"]).strip()
             intent = infer_intent(question)
+            scope = classify_request_scope(question, intent)
             state["question_for_model"] = question
             state["intent"] = intent
-            state["plan"] = [
-                "Classify RFP question intent.",
-                "Retrieve approved knowledge.",
-                "Draft a grounded answer for proposal-team review.",
-                "Reflect for authority and grounding compliance.",
-            ]
+            state["scope"] = scope
+            if scope["scope_status"] == "in_scope":
+                state["plan"] = [
+                    "Classify RFP question intent.",
+                    "Retrieve approved knowledge.",
+                    "Draft a grounded answer for proposal-team review.",
+                    "Reflect for authority and grounding compliance.",
+                ]
+            else:
+                state["plan"] = [
+                    "Classify request scope.",
+                    "Return deterministic scoped response without retrieval or generation.",
+                ]
         return state
 
     async def reason_node(self, state: dict[str, Any]) -> dict[str, Any]:
@@ -241,7 +255,40 @@ class ResponseDrafterAgent:
             trace_id=state.get("trace_id"),
         ):
             authority = self.constitution.evaluate_request(state["query"], state.get("context"))
+            scope = dict(state.get("scope") or classify_request_scope(state["question_for_model"], state["intent"]))
+            if authority["authority_status"] == "prohibited":
+                scope.update(
+                    {
+                        "scope_status": "prohibited_authority",
+                        "skip_retrieval": True,
+                        "skip_generation": True,
+                        "review_required": True,
+                        "deterministic_answer": (
+                            "I cannot draft pricing, legal, contractual, warranty, final-approval, "
+                            "or proposal-submission commitments. Please route this request to the "
+                            "proposal owner or the accountable SME."
+                        ),
+                        "limitations": [
+                            "Request asks for authority outside the response drafter charter; retrieval was not performed."
+                        ],
+                    }
+                )
+            elif scope.get("scope_status") == "outside_agent_scope":
+                authority = {
+                    **authority,
+                    "authority_status": "outside_agent_scope",
+                    "violations": [
+                        *authority.get("violations", []),
+                        {
+                            "rule": "agent_scope",
+                            "severity": "low",
+                            "message": "The request is outside the RFP response drafter scope.",
+                        },
+                    ],
+                    "proposal_review_required": False,
+                }
             state["authority"] = authority
+            state["scope"] = scope
             state["information_needs"] = _information_needs_for_intent(state["intent"])
         return state
 
@@ -255,6 +302,12 @@ class ResponseDrafterAgent:
             },
             trace_id=state.get("trace_id"),
         ) as span:
+            if state.get("scope", {}).get("skip_retrieval"):
+                span.set_attribute("retrieval.skipped", True)
+                span.set_attribute("retrieval.skip_reason", state.get("scope", {}).get("scope_status"))
+                state["evidence"] = []
+                return state
+
             evidence, tool_call = await self.knowledge.retrieve(
                 state["question_for_model"],
                 top_k=5,
@@ -265,6 +318,32 @@ class ResponseDrafterAgent:
             span.set_attribute("tool.status", tool_call.status)
             state["evidence"] = evidence
             state["tool_calls"] = [*state.get("tool_calls", []), tool_call]
+            print(
+                "[response-drafter.invoke] tool_output="
+                + json.dumps(
+                    {
+                        "trace_id": state.get("trace_id"),
+                        "tool_name": tool_call.tool_name,
+                        "status": tool_call.status,
+                        "target": tool_call.target,
+                        "latency_ms": tool_call.latency_ms,
+                        "error": tool_call.error,
+                        "evidence": [
+                            {
+                                "source_id": item.source_id,
+                                "title": item.title,
+                                "score": item.score,
+                                "content": item.content,
+                                "metadata": item.metadata,
+                            }
+                            for item in evidence
+                        ],
+                    },
+                    ensure_ascii=True,
+                    default=str,
+                ),
+                flush=True,
+            )
             if tool_call.status != "success":
                 state["system_errors"] = [
                     *state.get("system_errors", []),
@@ -284,6 +363,19 @@ class ResponseDrafterAgent:
             system_prompt_override=state.get("system_prompt_override"),
         )
         system_errors = state.get("system_errors", [])
+        scope = state.get("scope", {})
+        if scope.get("skip_generation"):
+            grounding = {
+                "grounding_status": "not_applicable",
+                "limitations": list(scope.get("limitations") or []),
+            }
+            state["prompt_resolution"] = prompt
+            state["grounding"] = grounding
+            state["draft_answer"] = str(scope.get("deterministic_answer") or "")
+            state["model_used"] = state["model"]
+            state["token_usage"] = TokenUsage(input_tokens=0, output_tokens=0, total_tokens=0)
+            return state
+
         if system_errors:
             grounding = {
                 "grounding_status": "retrieval_error",
@@ -291,6 +383,16 @@ class ResponseDrafterAgent:
                     "Approved supporting knowledge could not be retrieved because a configured dependency returned an error."
                 ],
             }
+            state["prompt_resolution"] = prompt
+            state["grounding"] = grounding
+            state["draft_answer"] = (
+                "The response drafter is currently unable to retrieve approved supporting "
+                "knowledge from the proposal knowledge service. Please route this item to "
+                "the proposal team or support owner before drafting a substantive answer."
+            )
+            state["model_used"] = state["model"]
+            state["token_usage"] = TokenUsage(input_tokens=0, output_tokens=0, total_tokens=0)
+            return state
         else:
             grounding = self.constitution.evaluate_grounding(state.get("evidence", []))
         generation_params = {
@@ -350,6 +452,12 @@ class ResponseDrafterAgent:
                     generation_params=generation_params,
                     system_errors=system_errors,
                 )
+                draft = _extract_draft_answer_text(draft)
+                if not draft.strip():
+                    draft = _fallback_answer_from_evidence(
+                        state.get("evidence", []),
+                        grounding,
+                    )
                 langfuse_generation.update(
                     output=draft,
                     model=model_used,
@@ -408,11 +516,16 @@ class ResponseDrafterAgent:
                 draft_answer=state["draft_answer"],
                 grounding_status=state["grounding"]["grounding_status"],
                 authority_status=state["authority"]["authority_status"],
-                review_required=True,
+                review_required=bool(state.get("scope", {}).get("review_required", True)),
                 limitations=list(dict.fromkeys(limitations)),
                 evidence_sources=[item.source_id for item in state.get("evidence", [])],
             )
-            state["response_text"] = json.dumps(draft.model_dump(), indent=2, ensure_ascii=True)
+            state["debug_payload"] = draft.model_dump()
+            logger.debug(
+                "response_drafter_debug=%s",
+                json.dumps(state["debug_payload"], ensure_ascii=True, sort_keys=True),
+            )
+            state["response_text"] = draft.draft_answer
         return state
 
     def _skills_from_context(self, context: dict[str, Any]) -> list[SkillLoad]:
@@ -470,6 +583,63 @@ def _information_needs_for_intent(intent: str) -> list[str]:
         ],
     }
     return needs.get(intent, ["approved capability description", "proposal-safe differentiators"])
+
+
+def _extract_draft_answer_text(raw_text: str) -> str:
+    text = str(raw_text or "").strip()
+    for _ in range(3):
+        candidate = _strip_code_fence(text)
+        try:
+            parsed = json.loads(candidate)
+        except json.JSONDecodeError:
+            return text
+
+        if isinstance(parsed, dict):
+            for key in ("draft_answer", "answer", "response"):
+                value = parsed.get(key)
+                if isinstance(value, str) and value.strip():
+                    next_text = value.strip()
+                    if next_text == text:
+                        return next_text
+                    text = next_text
+                    break
+                if isinstance(value, dict):
+                    text = json.dumps(value, ensure_ascii=True)
+                    break
+            else:
+                return text
+            continue
+
+        if isinstance(parsed, str) and parsed.strip():
+            text = parsed.strip()
+            continue
+        return text
+    return text
+
+
+def _fallback_answer_from_evidence(evidence: list[Any], grounding: dict[str, Any]) -> str:
+    for item in evidence:
+        content = str(getattr(item, "content", "") or "").strip()
+        if content:
+            limitations = [
+                str(value).strip()
+                for value in grounding.get("limitations", [])
+                if str(value).strip()
+            ]
+            if limitations:
+                return f"{content}\n\nNote: {' '.join(limitations)}"
+            return content
+    return (
+        "Approved supporting knowledge was retrieved, but the language model returned an empty draft. "
+        "Please route this item to the proposal team or support owner before using the response."
+    )
+
+
+def _strip_code_fence(text: str) -> str:
+    lines = text.strip().splitlines()
+    if len(lines) >= 3 and lines[0].strip().startswith("```") and lines[-1].strip() == "```":
+        return "\n".join(lines[1:-1]).strip()
+    return text
 
 
 agent = ResponseDrafterAgent()

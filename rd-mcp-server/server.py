@@ -115,7 +115,9 @@ async def tool_contract(_: Request) -> JSONResponse:
 
 async def bridge_search(request: Request) -> JSONResponse:
     body = await request.json()
-    arguments = body.get("arguments") if isinstance(body, dict) else {}
+    arguments = body.get("input") if isinstance(body, dict) else {}
+    if not isinstance(arguments, dict):
+        arguments = body.get("arguments") if isinstance(body, dict) else {}
     if not isinstance(arguments, dict):
         arguments = body if isinstance(body, dict) else {}
     result = search_mock_knowledge(
