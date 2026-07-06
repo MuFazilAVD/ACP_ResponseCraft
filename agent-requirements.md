@@ -164,9 +164,10 @@ class DraftResponse(BaseModel):
     draft_answer: str
 ```
 
-Runtime UI contract: `/invoke.response` contains only the user-facing
-`draft_answer` text. The full `DraftResponse` shape is retained as a debug/trace
-payload for review and logging, not rendered to the UI.
+Runtime UI contract: the public `/invoke` HTTP body contains only
+`{"response": "<draft_answer text>"}`. The full `DraftResponse` shape and invoke
+diagnostics are retained as debug/trace payloads for review and logging, not
+rendered to the UI.
 
 ---
 

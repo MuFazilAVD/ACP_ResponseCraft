@@ -18,6 +18,7 @@ from .prompts import PromptManager, PromptResolution
 from .schemas import (
     AgentConfigResponse,
     AgentHealthResponse,
+    InvokeAnswerResponse,
     DraftResponse,
     InvokeRequest,
     InvokeResponse,
@@ -656,10 +657,11 @@ def create_app() -> FastAPI:
     async def config() -> AgentConfigResponse:
         return agent.config()
 
-    @app.post("/invoke", response_model=InvokeResponse)
-    async def invoke(body: InvokeRequest) -> InvokeResponse:
+    @app.post("/invoke", response_model=InvokeAnswerResponse)
+    async def invoke(body: InvokeRequest) -> InvokeAnswerResponse:
         try:
-            return await agent.invoke(body)
+            result = await agent.invoke(body)
+            return InvokeAnswerResponse(response=result.response)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except Exception as exc:

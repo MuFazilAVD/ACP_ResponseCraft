@@ -32,7 +32,7 @@ The implementation compiles a LangGraph state graph when `langgraph` is installe
 
 - `GET /health`: liveness, identity, version, domain.
 - `GET /config`: default model, supported models, prompt config, Langfuse config, default generation parameters, requested entitlements, entitlement scope, governance charter.
-- `POST /invoke`: honors `model_override`, `context.system_prompt_override`, and all `*_override` generation parameters; returns response, prompt metadata, trace id, token usage, tool calls, and skills loaded.
+- `POST /invoke`: returns an answer-only public body, `{"response": "..."}`. The internal invoke result still records prompt metadata, trace id, token usage, tool calls, and skills loaded for tracing/logging, but those diagnostics are not serialized in the public response.
 - `POST /prompts/sync`: syncs local `prompts/*.md` variants to Langfuse PromptHub when credentials are configured; otherwise reports a local-only skip.
 
 ## Plan-Reason-Act-Reflect Loop
@@ -42,7 +42,7 @@ The implementation compiles a LangGraph state graph when `langgraph` is installe
 3. `retrieve`: query the governed MCP knowledge source and emit a visible tool error when retrieval fails or mock evidence is returned.
 4. `act`: run deterministic constitution/governance gates, then generate a draft answer grounded in retrieved evidence.
 5. `reflect`: check grounding, unsupported claims, prohibited commitments, and whether SME/proposal-team review is required.
-6. `render`: return the required `DraftResponse` shape inside the AEI response.
+6. `render`: retain the full `DraftResponse` shape as a debug/trace payload and return only the draft answer text in the public `/invoke` response.
 
 ## Governance Posture
 
@@ -119,7 +119,7 @@ Goal: prove governed retrieval works through the ACP MCP gateway.
 
 - Run first with `ENTITLEMENT_ENFORCEMENT=audit` to detect missing grants.
 - Switch to `ENTITLEMENT_ENFORCEMENT=enforce`.
-- Invoke a retrieval-backed RFP question and confirm `tool_calls[]` includes the governed MCP call.
+- Invoke a retrieval-backed RFP question and confirm the trace/log diagnostics include the governed MCP call.
 - Confirm undeclared or ungranted MCP access is denied by the gateway.
 
 Exit criteria: retrieval succeeds only through compiled entitlements, and denial behavior is observed for ungranted access.
@@ -129,7 +129,7 @@ Exit criteria: retrieval succeeds only through compiled entitlements, and denial
 Goal: confirm all live integrations produce platform-observable evidence.
 
 - Run `/prompts/sync` with real Langfuse credentials and verify prompt versions.
-- Invoke the agent with the live LLM gateway and verify the configured model, token usage, trace id, and output contract.
+- Invoke the agent with the live LLM gateway and verify the answer-only output contract plus configured model, token usage, and trace id in telemetry/log diagnostics.
 - Verify Langfuse trace observations for root agent and nested generation events in the private network.
 - Verify OTLP export reaches the live collector with `gen_ai.*` spans.
 
@@ -151,7 +151,7 @@ Exit criteria: ACP certification passes, with any autonomy limits still aligned 
 Goal: freeze the deployable state and close the known gaps.
 
 - Re-run local tests after any changes made during certification.
-- Re-run the conformance checklist after prompt, model, entitlement, governance, or tool changes.
+- Re-run the conformance checklist after prompt, model, entitlement, governance, output-contract, or tool changes.
 - Update `tracker.md`, `conformance-review.md`, and deployment notes with the final platform evidence.
 
 Exit criteria: tracker has no remaining external gaps except intentional future work such as final hybrid retrieval design.

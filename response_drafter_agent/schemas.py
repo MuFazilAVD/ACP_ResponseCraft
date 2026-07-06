@@ -64,6 +64,10 @@ class InvokeResponse(BaseModel):
     skills_loaded: list[SkillLoad] = Field(default_factory=list)
 
 
+class InvokeAnswerResponse(BaseModel):
+    response: str
+
+
 class AgentHealthResponse(BaseModel):
     status: str
     agent_id: str

@@ -198,7 +198,7 @@ class AEIEndpointTests(unittest.TestCase):
                 self.assertIsNone(os.environ.get("DEFAULT_MODEL"))
                 self.assertIsNone(os.environ.get("LANGFUSE_BASE_URL"))
 
-    def test_invoke_returns_aei_metadata_and_draft_response(self):
+    def test_invoke_returns_answer_only_response_body(self):
         agent_module.agent.knowledge = FakeRetriever()
         agent_module.agent.llm = FakeLLM()
         response = self.client.post(
@@ -221,14 +221,7 @@ class AEIEndpointTests(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 200)
         payload = response.json()
-        self.assertEqual(payload["model_used"], "openai/gpt-4.1")
-        self.assertTrue(payload["trace_id"])
-        self.assertGreater(payload["token_usage"]["total_tokens"], 0)
-        self.assertEqual(payload["prompt_source"], "override")
-        self.assertEqual(payload["prompt_variant"], "gpt")
-        self.assertTrue(payload["tool_calls"])
-        self.assertEqual(payload["tool_calls"][0]["source"], "mcp")
-        self.assertIn("skills_loaded", payload)
+        self.assertEqual(set(payload), {"response"})
         self.assertIn("TCS can address the security and compliance question", payload["response"])
         self.assertFalse(payload["response"].lstrip().startswith("{"))
         self.assertNotIn("draft_answer", payload["response"])
@@ -265,7 +258,6 @@ class AEIEndpointTests(unittest.TestCase):
         payload = response.json()
         self.assertIn("TCS describes security controls", payload["response"])
         self.assertNotEqual(payload["response"], "")
-        self.assertEqual(payload["token_usage"]["output_tokens"], 1)
 
     def test_invoke_blocks_prohibited_authority(self):
         fake_retriever = FakeRetriever()
@@ -281,7 +273,6 @@ class AEIEndpointTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         payload = response.json()
         self.assertIn("cannot draft", payload["response"].lower())
-        self.assertEqual(payload["tool_calls"], [])
         self.assertEqual(fake_retriever.calls, [])
         self.assertEqual(fake_llm.calls, [])
 
@@ -298,7 +289,6 @@ class AEIEndpointTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         payload = response.json()
         self.assertIn("outside that scope", payload["response"])
-        self.assertEqual(payload["tool_calls"], [])
         self.assertEqual(fake_retriever.calls, [])
         self.assertEqual(fake_llm.calls, [])
 
@@ -315,7 +305,6 @@ class AEIEndpointTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         payload = response.json()
         self.assertIn("Please share the RFP question", payload["response"])
-        self.assertEqual(payload["tool_calls"], [])
         self.assertEqual(fake_retriever.calls, [])
         self.assertEqual(fake_llm.calls, [])
 
@@ -332,7 +321,8 @@ class AEIEndpointTests(unittest.TestCase):
 
     def test_retrieval_error_returns_deterministic_dependency_message(self):
         fake_llm = FakeLLM()
-        agent_module.agent.knowledge = FakeRetriever(fail=True)
+        fake_retriever = FakeRetriever(fail=True)
+        agent_module.agent.knowledge = fake_retriever
         agent_module.agent.llm = fake_llm
         response = self.client.post(
             "/invoke",
@@ -341,7 +331,8 @@ class AEIEndpointTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         payload = response.json()
-        self.assertEqual(payload["tool_calls"][0]["status"], "error")
+        self.assertEqual(set(payload), {"response"})
+        self.assertEqual(len(fake_retriever.calls), 1)
         self.assertEqual(fake_llm.calls, [])
         self.assertIn("unable to retrieve", payload["response"].lower())
 

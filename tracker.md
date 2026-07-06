@@ -23,18 +23,18 @@
 - [x] Run local tests.
 - [x] Complete final conformance checklist.
 - [x] Add scoped guardrail routing so greetings, unrelated factual questions, and prohibited authority requests skip MCP/LLM.
-- [x] Change `/invoke.response` to the user-facing draft answer only, with structured debug payload logged instead of rendered.
+- [x] Change the public `/invoke` HTTP body to answer-only JSON (`{"response": "..."}`), with structured debug/diagnostic payloads logged and traced instead of rendered.
 
 ## Conformance Checklist
 
-- [x] AEI endpoints `/health`, `/config`, `/invoke`, `/prompts/sync` implemented and validated.
-- [x] `/invoke` passes `model_override`, `context.system_prompt_override`, and all generation overrides through.
+- [ ] AEI endpoints `/health`, `/config`, `/invoke`, `/prompts/sync` implemented, but `/invoke` currently uses an answer-only body rather than the full AEI metadata envelope required for formal ACP conformance.
+- [ ] `/invoke` passes `context.system_prompt_override` and generation overrides through; `model_override` remains disabled while invoke hardcodes `GLM-4.7-Flash`.
 - [x] `/config` reports default generation parameters.
 - [x] `requested_entitlements` and `entitlement_scope` declared.
 - [x] Governance charter declared with LOB, accountable IdP role, action classes, risk tiers, and oversight.
 - [x] Golden dataset exists and is bound to `proposal_management.rfp.response_drafting`.
-- [x] Tool access is declared as entitlements and emitted in `tool_calls[]`.
-- [x] OTel `gen_ai.*` spans wired and `trace_id` plus `token_usage` returned.
+- [ ] Tool access is declared as entitlements and recorded in internal diagnostics/logs; `tool_calls[]` is no longer returned in the public `/invoke` body.
+- [ ] OTel `gen_ai.*` spans are wired, and `trace_id` plus `token_usage` are retained internally; they are no longer returned in the public `/invoke` body.
 - [x] Prompts externalized under `prompts/*.md` and syncable to Langfuse.
 - [x] System prompt includes role, anti-capability, output contract, grounding rules, refusal boundaries, prompt-injection defense, and length budget.
 - [x] Deployment path documented for internal HTTP registration.
@@ -49,7 +49,7 @@
 - [x] Removed the live LLM placeholder key fallback; missing LLM credentials now fail clearly instead of sending `not-required` to the gateway.
 - [x] Live LLM local smoke completed by operator with real key; LLM integration is no longer a pending gap.
 - [x] Runtime mock behavior removed from invoke: `context.force_mock` is rejected, local mock knowledge fallback is disabled, local LLM draft fallback is removed, LLM errors return invoke failures, and MCP retrieval errors or mock-marked evidence return deterministic dependency messages without asking the LLM to draft around missing approved knowledge.
-- [x] UI/debug boundary tightened: `/invoke.response` contains only the draft answer, while the full `DraftResponse` diagnostic shape is logged at debug level and retained in trace metadata.
+- [x] UI/debug boundary tightened: public `/invoke` returns only `{"response": "<draft answer>"}`, while the full `DraftResponse` and invoke diagnostic shapes are logged at debug level and retained in trace metadata.
 
 ## Latest Verification
 
@@ -62,9 +62,11 @@
 - [x] 2026-07-06: Added invoke fallback for blank LLM completions after successful retrieval: if the model returns empty/whitespace and approved evidence exists, `/invoke.response` now uses the top evidence content with grounding limitations instead of returning an empty string.
 - [x] 2026-07-06: `.\venv\Scripts\python.exe -m compileall response_drafter_agent` passed after the blank-LLM fallback.
 - [x] 2026-07-06: `.\venv\Scripts\python.exe -m unittest tests.test_aei.AEIEndpointTests.test_invoke_falls_back_to_evidence_when_llm_returns_blank` passed.
-- [ ] 2026-07-06: `.\venv\Scripts\python.exe -m unittest discover -s tests` currently has 1 failure out of 21 tests: `test_invoke_returns_aei_metadata_and_draft_response` still expects `model_override` propagation to `openai/gpt-4.1`, while the current local code has `InvokeRequest.model_override` commented out and hardcodes `GLM-4.7-Flash` in invoke.
+- [x] 2026-07-06: Public `/invoke` body changed to answer-only JSON and `tests.test_aei.AEIEndpointTests.test_invoke_returns_answer_only_response_body` now asserts `set(payload) == {"response"}`.
+- [x] 2026-07-06: `.\venv\Scripts\python.exe -m compileall response_drafter_agent` passed after the answer-only public response change.
+- [x] 2026-07-06: `.\venv\Scripts\python.exe -m unittest discover -s tests` passed with 21 tests after the answer-only public response change.
 - [x] 2026-07-02: `.\venv\Scripts\python.exe -m compileall response_drafter_agent` passed after bridge rewiring.
-- [ ] 2026-07-02: `.\venv\Scripts\python.exe -m unittest discover -s tests` had 1 failure out of 20 tests: `test_invoke_returns_aei_metadata_and_draft_response` expected `model_override` propagation to `openai/gpt-4.1`, while the local code had `InvokeRequest.model_override` commented out and hardcoded `GLM-4.7-Flash` in invoke.
+- [x] 2026-07-02: Historical full-test failure was superseded by the 2026-07-06 passing 21-test run; the remaining `model_override` contract mismatch is tracked in the completion route map.
 - [x] 2026-06-30: Added `deploy/response-drafter.service.example` for the `/data/acp-agents/response-drafter` deployment on port 8006 and aligned `deploy/install_systemd.sh` to default to port 8006. Actual service start and ACP registration remain pending operator/platform steps.
 - [x] 2026-06-30: Added deterministic pre-retrieval scope guardrails, answer-only response rendering, JSON draft unwrapping, deterministic retrieval-error messaging, and prompt/test coverage for those behaviors.
 - [x] 2026-06-30: `.\venv\Scripts\python.exe -m unittest discover -s tests` passed locally with 19 tests.
@@ -90,11 +92,13 @@
 - [ ] Verify live OTLP export with `gen_ai.*` spans.
 - [ ] Launch ACP readiness/certification against `proposal_management.rfp.response_drafting`.
 - [ ] Re-run local tests and the conformance checklist after any platform-driven prompt, model, entitlement, governance, or tool change.
-- [ ] Resolve the current `model_override` contract mismatch, or update tests and conformance docs if the service is intentionally fixed to `GLM-4.7-Flash`.
+- [ ] Restore the full AEI `/invoke` metadata envelope, or add an ACP-compatible adapter, before formal ACP registration/readiness/certification.
+- [ ] Resolve the current `model_override` contract mismatch, or document the service as intentionally fixed to `GLM-4.7-Flash`.
 
 ## Known External Gaps
 
 - Private-network Langfuse auth/integration and PromptHub sync are operator-verified with real credentials. Keep prompt version and trace evidence with the formal review package when ACP conformance is submitted.
+- Current public `/invoke` output is intentionally answer-only JSON for the UI/runtime requirement. Formal ACP AEI conformance still requires the metadata envelope (`model_used`, `latency_ms`, `token_usage`, `trace_id`, prompt fields, `tool_calls`, and `skills_loaded`) or a compatible adapter.
 - Hosted contract-test MCP health, contract, and `input.query` bridge call are reachable for the tested annual-revenue query. Runtime invoke still treats retrieval dependency errors as errors instead of evidence. ACP MCP resource registration, real approved evidence, and grant compilation still need platform validation. The final hybrid retrieval internals will be designed after the knowledgebase, chunking, and metadata strategy are ready.
 - ACP entitlement reconciliation, compilation, readiness run, and certification require the platform API.
 - MCP gateway enforcement under `ENTITLEMENT_ENFORCEMENT=enforce` must be verified after ACP compiles the grants.

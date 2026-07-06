@@ -1,6 +1,6 @@
 # TCS RFP Response Drafter
 
-ACP/AEI-conformant RAG + Tools agent for drafting grounded answers to RFP questions.
+ACP-oriented RAG + Tools agent for drafting grounded answers to RFP questions.
 
 ## What It Does
 
@@ -11,7 +11,8 @@ ACP/AEI-conformant RAG + Tools agent for drafting grounded answers to RFP questi
 - Uses the standard ACP LiteLLM-compatible Gemini gateway by default.
 - Drafts an answer for proposal-team and SME review.
 - Blocks pricing, legal, contractual, commercial commitment, and final submission authority.
-- Returns the user-facing draft answer in the AEI `response` field, with prompt metadata, token usage, trace id, tool calls, and skills loaded in separate AEI fields.
+- Returns a compact `POST /invoke` body containing only the user-facing draft answer: `{"response": "..."}`.
+- Keeps prompt metadata, token usage, trace id, tool calls, and skills loaded in internal diagnostics, traces, and logs rather than the public invoke body.
 - Logs the structured debug payload for trace/review use instead of rendering it to the UI.
 - Does not expose runtime mock drafting or local mock retrieval. If LLM, MCP, or another dependency fails, the response surfaces the failure instead of pretending a grounded draft was produced.
 
@@ -75,6 +76,16 @@ Invoke-RestMethod -Method Post `
   -ContentType "application/json" `
   -Body '{"query":"Describe your approach to security controls and compliance."}'
 ```
+
+Current response shape:
+
+```json
+{
+  "response": "Draft answer text..."
+}
+```
+
+This answer-only body is intentionally slimmer than the full AEI metadata envelope. For formal ACP conformance review, restore the full envelope or front it with an ACP-compatible adapter.
 
 For the systemd deployment, call port `8006` instead.
 
