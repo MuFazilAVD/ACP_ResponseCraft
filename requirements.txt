@@ -11,3 +11,4 @@ opentelemetry-api>=1.25.0
 opentelemetry-sdk>=1.25.0
 opentelemetry-exporter-otlp-proto-http>=1.25.0
 PyYAML>=6.0.0
+boto3>=1.34.0

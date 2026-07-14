@@ -27,10 +27,15 @@ SECRET_ENV_NAMES = frozenset(
         "PROPOSAL_KNOWLEDGE_API_KEY",
         "APPROVED_CAPABILITY_LIBRARY_API_KEY",
         "SECURITY_COMPLIANCE_LIBRARY_API_KEY",
+        # AWS / DynamoDB credentials
+        "AWS_ACCESS_KEY_ID",
+        "AWS_SECRET_ACCESS_KEY",
+        "DYNAMODB_REGION",
     }
 )
 DEFAULT_AGENT_HOST = "0.0.0.0"
 DEFAULT_AGENT_PORT = 8110
+DEFAULT_DYNAMODB_REGION = "ap-south-1"
 DEFAULT_LLM_PROVIDER = "litellm"
 DEFAULT_LLM_BASE_URL = "https://d2brdeqy144bwg.cloudfront.net/myllm/v1/"
 DEFAULT_LLM_MODEL = "GLM-4.7-Flash"

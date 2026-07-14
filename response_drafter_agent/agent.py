@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import time
+import uuid
 from typing import Any
 
 from fastapi import FastAPI, HTTPException
@@ -33,6 +34,7 @@ from .settings import (
     AgentSettings,
 )
 from .telemetry import Telemetry
+from .dynamo_tracker import InvokeTracker
 
 
 logger = get_logger(__name__)
@@ -158,7 +160,7 @@ class ResponseDrafterAgent:
         )
         return result
 
-    async def invoke(self, body: InvokeRequest) -> InvokeResponse:
+    async def invoke(self, body: InvokeRequest, tracker: InvokeTracker | None = None) -> InvokeResponse:
         started = time.perf_counter()
         context = body.context or {}
 
@@ -283,6 +285,35 @@ class ResponseDrafterAgent:
 
                 final_state = await self.graph.ainvoke(initial_state)
 
+                # ---- DynamoDB: record tool call or no-tool path ----------
+                tool_calls_list = final_state.get("tool_calls", [])
+                if tracker is not None:
+                    if tool_calls_list:
+                        # Use the first (and typically only) tool call for tracking.
+                        tc = tool_calls_list[0]
+                        tool_arguments_latency = 0.0  # argument prep is sub-ms within the node
+                        mcp_tool_latency = (tc.latency_ms or 0) / 1000.0
+                        # retrieved_chunks: serialise evidence to a JSON string for DynamoDB
+                        evidence_list = final_state.get("evidence", [])
+                        chunks_payload = [
+                            {
+                                "source_id": item.source_id,
+                                "title": item.title,
+                                "content": item.content,
+                                "score": item.score,
+                                "metadata": item.metadata,
+                            }
+                            for item in evidence_list
+                        ]
+                        tracker.record_tool(
+                            tool_arguments=tc.request if tc.request else {},
+                            tool_arguments_latency=tool_arguments_latency,
+                            retrieved_chunks=chunks_payload,
+                            mcp_tool_latency=mcp_tool_latency,
+                        )
+                    else:
+                        tracker.record_no_tool()
+
                 token_usage: TokenUsage = final_state.get("token_usage") or TokenUsage()
                 span.set_attribute("gen_ai.response.model", final_state.get("model_used") or requested_model)
                 span.set_attribute("gen_ai.usage.input_tokens", token_usage.input_tokens)
@@ -348,6 +379,13 @@ class ResponseDrafterAgent:
                 langfuse_output["scope_status"],
                 response.trace_id,
             )
+
+            # ---- DynamoDB: complete ----------------------------------------
+            if tracker is not None:
+                tracker.complete(
+                    final_answer=response.response,
+                    final_answer_latency=latency_ms / 1000.0,
+                )
 
             # -- section divider -------------------------------------------
             log_section_end(
@@ -1027,8 +1065,17 @@ def create_app() -> FastAPI:
 
     @app.post("/invoke", response_model=InvokeAnswerResponse)
     async def invoke(body: InvokeRequest) -> InvokeAnswerResponse:
+        # -- DynamoDB: generate invoke_id and create initial record ----------
+        invoke_id = str(uuid.uuid4())
+        tracker = InvokeTracker(invoke_id=invoke_id, input_query=body.query)
+        tracker.start()
+        logger.info(
+            "[invoke] DynamoDB tracking started | invoke_id=%s | conversation_id=%s",
+            invoke_id,
+            body.conversation_id,
+        )
         try:
-            result = await agent.invoke(body)
+            result = await agent.invoke(body, tracker=tracker)
             return InvokeAnswerResponse(response=result.response)
         except ValueError as exc:
             logger.warning(
@@ -1036,6 +1083,7 @@ def create_app() -> FastAPI:
                 exc.__class__.__name__,
                 str(exc),
             )
+            tracker.fail(error_message=str(exc), error_type=exc.__class__.__name__)
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except Exception as exc:
             logger.error(
@@ -1044,6 +1092,7 @@ def create_app() -> FastAPI:
                 str(exc),
                 exc_info=True,
             )
+            tracker.fail(error_message=str(exc), error_type=exc.__class__.__name__)
             raise HTTPException(status_code=502, detail=f"Invoke failed: {exc}") from exc
 
     @app.post("/prompts/sync", response_model=PromptSyncResponse)
