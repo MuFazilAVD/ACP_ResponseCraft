@@ -7,6 +7,9 @@ from pathlib import Path
 from typing import Any
 
 from .knowledge import Evidence
+from .logging_utils import get_logger
+
+logger = get_logger(__name__)
 
 
 PROHIBITED_PATTERNS = {
@@ -41,11 +44,23 @@ class Constitution:
     def __init__(self, path: Path) -> None:
         self.path = path
         self.rules = self._load_rules()
+        logger.debug(
+            "[Constitution.__init__] Loaded | path=%s | rule_count=%d",
+            self.path,
+            len(self.rules),
+        )
 
     def evaluate_request(self, query: str, context: dict[str, Any] | None) -> dict[str, Any]:
+        logger.debug(
+            "[evaluate_request] Evaluating query against authority rules | query_len=%d",
+            len(query),
+        )
         violations: list[dict[str, Any]] = []
         for rule_name, pattern in PROHIBITED_PATTERNS.items():
             if pattern.search(query):
+                logger.debug(
+                    "[evaluate_request] Prohibited pattern matched | rule=%s", rule_name
+                )
                 violations.append(
                     {
                         "rule": rule_name,
@@ -55,6 +70,7 @@ class Constitution:
                 )
 
         if any(pattern.search(query) for pattern in PII_PATTERNS):
+            logger.debug("[evaluate_request] PII pattern matched — adding pii_minimization violation")
             violations.append(
                 {
                     "rule": "pii_minimization",
@@ -64,6 +80,7 @@ class Constitution:
             )
 
         if _contains_prompt_injection(query):
+            logger.warning("[evaluate_request] Prompt injection attempt detected in query")
             violations.append(
                 {
                     "rule": "prompt_injection_defense",
@@ -79,6 +96,18 @@ class Constitution:
         else:
             authority = "within_agent_authority"
 
+        if violations:
+            logger.warning(
+                "[evaluate_request] Violations found | authority_status=%s | count=%d | rules=%s",
+                authority,
+                len(violations),
+                [v["rule"] for v in violations],
+            )
+        else:
+            logger.info(
+                "[evaluate_request] No violations | authority_status=%s", authority
+            )
+
         return {
             "authority_status": authority,
             "violations": violations,
@@ -86,62 +115,122 @@ class Constitution:
         }
 
     def evaluate_grounding(self, evidence: list[Evidence]) -> dict[str, Any]:
+        logger.debug(
+            "[evaluate_grounding] Evaluating grounding | evidence_count=%d", len(evidence)
+        )
         if not evidence:
+            logger.warning(
+                "[evaluate_grounding] No evidence retrieved — grounding_status=insufficient_evidence"
+            )
             return {
                 "grounding_status": "insufficient_evidence",
                 "limitations": ["No approved supporting knowledge was retrieved."],
             }
-        if len(evidence) == 1 or max(item.score for item in evidence) < 0.25:
+        max_score = max(item.score for item in evidence)
+        if len(evidence) == 1 or max_score < 0.25:
+            logger.warning(
+                "[evaluate_grounding] Limited evidence | evidence_count=%d | max_score=%.3f | "
+                "grounding_status=limited_evidence",
+                len(evidence),
+                max_score,
+            )
             return {
                 "grounding_status": "limited_evidence",
                 "limitations": ["Supporting knowledge is limited; SME validation is required."],
             }
+        logger.info(
+            "[evaluate_grounding] Well-grounded | evidence_count=%d | max_score=%.3f | "
+            "grounding_status=grounded",
+            len(evidence),
+            max_score,
+        )
         return {"grounding_status": "grounded", "limitations": []}
 
     def reflect(self, draft_answer: str, evidence: list[Evidence], authority: dict[str, Any]) -> dict[str, Any]:
+        logger.debug(
+            "[reflect] Running reflection | authority_status=%s | draft_len=%d | evidence_count=%d",
+            authority.get("authority_status"),
+            len(draft_answer),
+            len(evidence),
+        )
         findings: list[str] = []
         lower = draft_answer.lower()
         if authority["authority_status"] == "prohibited":
             findings.append("Draft avoids prohibited final approval or commercial commitment.")
+            logger.debug("[reflect] Prohibited authority noted in findings")
         if not evidence and not any(phrase in lower for phrase in ("unavailable", "unable", "could not retrieve")):
             findings.append("Draft should explicitly state that approved supporting knowledge is unavailable.")
+            logger.warning(
+                "[reflect] Draft does not acknowledge missing evidence — flagging for revision"
+            )
         if re.search(r"\bguarantee[sd]?|binding\b", lower):
             findings.append("Draft contains commitment language and must be revised before use.")
+            logger.warning("[reflect] Commitment language detected in draft — requires_revision=True")
+        requires_revision = any("must be revised" in item for item in findings)
+        logger.info(
+            "[reflect] Reflection result | requires_revision=%s | findings_count=%d",
+            requires_revision,
+            len(findings),
+        )
         return {
             "reflection": findings or ["Draft passed deterministic grounding and authority checks."],
-            "requires_revision": any("must be revised" in item for item in findings),
+            "requires_revision": requires_revision,
         }
 
     def _load_rules(self) -> dict[str, Any]:
         if not self.path.exists():
+            logger.warning(
+                "[_load_rules] Constitution file not found — using empty rules | path=%s",
+                self.path,
+            )
             return {}
         try:
             import yaml
 
             parsed = yaml.safe_load(self.path.read_text(encoding="utf-8"))
-            return parsed if isinstance(parsed, dict) else {}
-        except Exception:
+            rules = parsed if isinstance(parsed, dict) else {}
+            logger.debug(
+                "[_load_rules] Constitution rules loaded | path=%s | rule_count=%d",
+                self.path,
+                len(rules),
+            )
+            return rules
+        except Exception as exc:
+            logger.error(
+                "[_load_rules] Failed to parse constitution file | path=%s | error=%s",
+                self.path,
+                exc.__class__.__name__,
+            )
             return {}
 
 
 def infer_intent(query: str) -> str:
     lowered = query.lower()
     if any(token in lowered for token in ("security", "compliance", "iso", "soc", "data protection")):
-        return "security_and_compliance"
-    if any(token in lowered for token in ("methodology", "delivery", "governance", "transition")):
-        return "delivery_methodology"
-    if any(token in lowered for token in ("business continuity", "disaster recovery", "bcp", "resilience")):
-        return "business_continuity"
-    if any(token in lowered for token in ("staffing", "resourcing", "team", "skill")):
-        return "staffing_and_resourcing"
-    if any(token in lowered for token in ("architecture", "cloud", "technology", "solution")):
-        return "solution_architecture"
-    return "general_capability"
+        intent = "security_and_compliance"
+    elif any(token in lowered for token in ("methodology", "delivery", "governance", "transition")):
+        intent = "delivery_methodology"
+    elif any(token in lowered for token in ("business continuity", "disaster recovery", "bcp", "resilience")):
+        intent = "business_continuity"
+    elif any(token in lowered for token in ("staffing", "resourcing", "team", "skill")):
+        intent = "staffing_and_resourcing"
+    elif any(token in lowered for token in ("architecture", "cloud", "technology", "solution")):
+        intent = "solution_architecture"
+    else:
+        intent = "general_capability"
+    logger.debug("[infer_intent] Intent inferred | intent=%s | query_len=%d", intent, len(query))
+    return intent
 
 
 def classify_request_scope(query: str, intent: str) -> dict[str, Any]:
+    logger.debug(
+        "[classify_request_scope] Classifying scope | intent=%s | query_len=%d",
+        intent,
+        len(query),
+    )
     stripped = query.strip()
     if GREETING_PATTERN.match(stripped):
+        logger.info("[classify_request_scope] Scope classified as small_talk")
         return {
             "scope_status": "small_talk",
             "skip_retrieval": True,
@@ -155,6 +244,7 @@ def classify_request_scope(query: str, intent: str) -> dict[str, Any]:
         }
 
     if intent != "general_capability" or PROPOSAL_SCOPE_PATTERN.search(stripped):
+        logger.info("[classify_request_scope] Scope classified as in_scope | intent=%s", intent)
         return {
             "scope_status": "in_scope",
             "skip_retrieval": False,
@@ -164,6 +254,9 @@ def classify_request_scope(query: str, intent: str) -> dict[str, Any]:
             "limitations": [],
         }
 
+    logger.warning(
+        "[classify_request_scope] Request classified as outside_agent_scope | intent=%s", intent
+    )
     return {
         "scope_status": "outside_agent_scope",
         "skip_retrieval": True,
@@ -180,8 +273,21 @@ def classify_request_scope(query: str, intent: str) -> dict[str, Any]:
 
 def redact_sensitive_text(text: str) -> str:
     redacted = text
+    redaction_count = 0
     for pattern in PII_PATTERNS:
-        redacted = pattern.sub("[REDACTED]", redacted)
+        new_text = pattern.sub("[REDACTED]", redacted)
+        if new_text != redacted:
+            redaction_count += 1
+        redacted = new_text
+    if redaction_count:
+        logger.info(
+            "[redact_sensitive_text] PII redacted | pattern_matches=%d | original_len=%d | redacted_len=%d",
+            redaction_count,
+            len(text),
+            len(redacted),
+        )
+    else:
+        logger.debug("[redact_sensitive_text] No PII detected | text_len=%d", len(text))
     return redacted
 
 

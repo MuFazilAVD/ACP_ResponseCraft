@@ -22,3 +22,7 @@ dist/
 
 .DS_Store
 Thumbs.db
+
+# Application log files
+logs/
+*.log

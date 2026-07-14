@@ -8,11 +8,14 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Any, Iterator
 
+from .logging_utils import get_logger
 from .settings import (
     DEFAULT_OTLP_AUTH_HEADER,
     DEFAULT_OTLP_AUTH_SCHEME,
     DEFAULT_OTLP_ENDPOINT,
 )
+
+logger = get_logger(__name__)
 
 
 @dataclass
@@ -35,6 +38,10 @@ class Telemetry:
         self.enabled = False
         self._trace = None
         self._tracer = None
+        logger.debug(
+            "[Telemetry.__init__] Initialising OTel telemetry | service_name=%s",
+            self.service_name,
+        )
         self._init_otel()
 
     def _init_otel(self) -> None:
@@ -46,7 +53,11 @@ class Telemetry:
             from opentelemetry.exporter.otlp.proto.http.trace_exporter import (
                 OTLPSpanExporter,
             )
-        except Exception:
+        except Exception as exc:
+            logger.debug(
+                "[_init_otel] OpenTelemetry SDK not installed — tracing disabled | error=%s",
+                exc.__class__.__name__,
+            )
             return
 
         try:
@@ -67,11 +78,31 @@ class Telemetry:
                         DEFAULT_OTLP_AUTH_HEADER: f"{DEFAULT_OTLP_AUTH_SCHEME} {otlp_api_key}",
                     }
                 provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter(**exporter_kwargs)))
+                logger.info(
+                    "[_init_otel] OTel exporter configured | endpoint=%s | auth_key_set=%s",
+                    endpoint,
+                    bool(otlp_api_key),
+                )
+            else:
+                logger.warning(
+                    "[_init_otel] No OTLP_ENDPOINT configured — spans will not be exported "
+                    "(set DEFAULT_OTLP_ENDPOINT or OTLP_ENDPOINT env var)"
+                )
             trace.set_tracer_provider(provider)
             self._trace = trace
             self._tracer = trace.get_tracer(self.service_name)
             self.enabled = True
-        except Exception:
+            logger.info(
+                "[_init_otel] OTel tracing ENABLED | service_name=%s | endpoint=%s",
+                self.service_name,
+                endpoint or "(no exporter)",
+            )
+        except Exception as exc:
+            logger.error(
+                "[_init_otel] OTel initialisation FAILED | service_name=%s | error=%s",
+                self.service_name,
+                exc.__class__.__name__,
+            )
             self._trace = None
             self._tracer = None
             self.enabled = False
@@ -85,6 +116,11 @@ class Telemetry:
     ) -> Iterator[SpanHandle]:
         if self._tracer is None:
             handle = SpanHandle(trace_id=trace_id or uuid.uuid4().hex)
+            logger.debug(
+                "[span] OTel not available — using no-op span | name=%s | trace_id=%s",
+                name,
+                handle.trace_id,
+            )
             yield handle
             return
 
@@ -94,4 +130,10 @@ class Telemetry:
                     span.set_attribute(key, value)
             ctx = span.get_span_context()
             handle = SpanHandle(trace_id=format(ctx.trace_id, "032x"), _span=span)
+            logger.debug(
+                "[span] OTel span opened | name=%s | trace_id=%s",
+                name,
+                handle.trace_id,
+            )
             yield handle
+            logger.debug("[span] OTel span closed | name=%s | trace_id=%s", name, handle.trace_id)

@@ -10,12 +10,15 @@ from typing import Any
 
 import httpx
 
+from .logging_utils import get_logger
 from .schemas import ToolCall
 from .settings import (
     DEFAULT_MCP_PROPOSAL_KNOWLEDGE_TOOL,
     DEFAULT_MCP_PROPOSAL_KNOWLEDGE_TRANSPORT,
     DEFAULT_MCP_PROPOSAL_KNOWLEDGE_URL,
 )
+
+logger = get_logger(__name__)
 
 
 @dataclass(frozen=True)
@@ -33,6 +36,13 @@ class KnowledgeRetriever:
         self.mcp_tool = DEFAULT_MCP_PROPOSAL_KNOWLEDGE_TOOL
         self.mcp_transport = DEFAULT_MCP_PROPOSAL_KNOWLEDGE_TRANSPORT
         self.mcp_api_key = os.getenv("MCP_API_KEY") or os.getenv("ACP_AGENT_API_KEY") or ""
+        logger.debug(
+            "[KnowledgeRetriever.__init__] Initialised | transport=%s | tool=%s | url=%s | api_key_set=%s",
+            self.mcp_transport,
+            self.mcp_tool,
+            self.mcp_url,
+            bool(self.mcp_api_key),
+        )
 
     async def retrieve(
         self,
@@ -44,8 +54,21 @@ class KnowledgeRetriever:
         started = time.perf_counter()
         request = {"query": query, "top_k": top_k, "filters": filters or {}}
 
+        logger.info(
+            "[retrieve] Starting retrieval | tool=%s | transport=%s | top_k=%d | query_len=%d",
+            self.mcp_tool,
+            self.mcp_transport,
+            top_k,
+            len(query),
+        )
+
         if not self.mcp_url:
             latency_ms = int((time.perf_counter() - started) * 1000)
+            logger.error(
+                "[retrieve] MCP endpoint URL is not configured | tool=%s | latency_ms=%d",
+                self.mcp_tool,
+                latency_ms,
+            )
             return [], ToolCall(
                 tool_name=self.mcp_tool,
                 source="mcp",
@@ -61,6 +84,12 @@ class KnowledgeRetriever:
         latency_ms = int((time.perf_counter() - started) * 1000)
         tool_error = _tool_error_from_evidence(evidence)
         if error is None and tool_error:
+            logger.error(
+                "[retrieve] Tool execution error in evidence | tool=%s | latency_ms=%d | error=%s",
+                self.mcp_tool,
+                latency_ms,
+                tool_error[:200],
+            )
             return [], ToolCall(
                 tool_name=self.mcp_tool,
                 source="mcp",
@@ -75,6 +104,13 @@ class KnowledgeRetriever:
                 error=tool_error,
             )
         if error is None and _contains_mock_evidence(evidence):
+            logger.warning(
+                "[retrieve] Mock knowledge source detected and rejected | tool=%s | latency_ms=%d | "
+                "evidence_count=%d",
+                self.mcp_tool,
+                latency_ms,
+                len(evidence),
+            )
             return [], ToolCall(
                 tool_name=self.mcp_tool,
                 source="mcp",
@@ -90,6 +126,14 @@ class KnowledgeRetriever:
                 error="MockKnowledgeSourceReturned",
             )
         if error is None:
+            logger.info(
+                "[retrieve] Retrieval successful | tool=%s | evidence_count=%d | latency_ms=%d | "
+                "sources=%s",
+                self.mcp_tool,
+                len(evidence),
+                latency_ms,
+                [item.source_id for item in evidence],
+            )
             return evidence, ToolCall(
                 tool_name=self.mcp_tool,
                 source="mcp",
@@ -102,6 +146,12 @@ class KnowledgeRetriever:
                     "sources": [item.source_id for item in evidence],
                 },
             )
+        logger.error(
+            "[retrieve] MCP retrieval FAILED | tool=%s | error=%s | latency_ms=%d",
+            self.mcp_tool,
+            error,
+            latency_ms,
+        )
         return [], ToolCall(
             tool_name=self.mcp_tool,
             source="mcp",
@@ -114,7 +164,13 @@ class KnowledgeRetriever:
         )
 
     async def _retrieve_from_mcp(self, request: dict[str, Any]) -> tuple[list[Evidence], str | None]:
-        if self._use_streamable_mcp():
+        use_streamable = self._use_streamable_mcp()
+        logger.debug(
+            "[_retrieve_from_mcp] Routing MCP call | transport=%s | use_streamable=%s",
+            self.mcp_transport,
+            use_streamable,
+        )
+        if use_streamable:
             return await self._retrieve_from_streamable_mcp(request)
         return await self._retrieve_from_http_bridge(request)
 
@@ -124,13 +180,28 @@ class KnowledgeRetriever:
             headers["Authorization"] = f"Bearer {self.mcp_api_key}"
 
         payload = {"input": {"query": request["query"]}}
+        logger.debug(
+            "[_retrieve_from_http_bridge] Sending HTTP POST | url=%s | query_len=%d",
+            self.mcp_url,
+            len(request["query"]),
+        )
         try:
             async with httpx.AsyncClient(timeout=30.0) as client:
                 response = await client.post(self.mcp_url, headers=headers, json=payload)
                 response.raise_for_status()
                 data = response.json()
+            logger.debug(
+                "[_retrieve_from_http_bridge] HTTP response received | status_code=%s",
+                response.status_code,
+            )
             return self._normalise_mcp_results(data), None
         except Exception as exc:
+            logger.error(
+                "[_retrieve_from_http_bridge] HTTP request FAILED | url=%s | error=%s | detail=%s",
+                self.mcp_url,
+                exc.__class__.__name__,
+                str(exc)[:300],
+            )
             return [], exc.__class__.__name__
 
     async def _retrieve_from_streamable_mcp(self, request: dict[str, Any]) -> tuple[list[Evidence], str | None]:
@@ -138,12 +209,21 @@ class KnowledgeRetriever:
             from mcp import ClientSession
             from mcp.client.streamable_http import streamable_http_client
         except Exception as exc:
+            logger.error(
+                "[_retrieve_from_streamable_mcp] MCP client library unavailable | error=%s",
+                exc.__class__.__name__,
+            )
             return [], f"MCPClientUnavailable:{exc.__class__.__name__}"
 
         headers = {"X-Agent-Key": "tcs-rfp-response-drafter"}
         if self.mcp_api_key:
             headers["Authorization"] = f"Bearer {self.mcp_api_key}"
 
+        logger.debug(
+            "[_retrieve_from_streamable_mcp] Starting streamable MCP session | url=%s | tool=%s",
+            self.mcp_url,
+            self.mcp_tool,
+        )
         try:
             async with httpx.AsyncClient(timeout=30.0, headers=headers) as http_client:
                 async with streamable_http_client(self.mcp_url, http_client=http_client) as (
@@ -157,8 +237,18 @@ class KnowledgeRetriever:
             data = getattr(result, "structuredContent", None)
             if data is None:
                 data = {"content": [item.model_dump() for item in getattr(result, "content", [])]}
+            logger.debug(
+                "[_retrieve_from_streamable_mcp] Streamable MCP call succeeded | tool=%s",
+                self.mcp_tool,
+            )
             return self._normalise_mcp_results(data), None
         except Exception as exc:
+            logger.error(
+                "[_retrieve_from_streamable_mcp] Streamable MCP call FAILED | url=%s | error=%s | detail=%s",
+                self.mcp_url,
+                exc.__class__.__name__,
+                str(exc)[:300],
+            )
             return [], exc.__class__.__name__
 
     def _use_streamable_mcp(self) -> bool:
@@ -220,6 +310,11 @@ class KnowledgeRetriever:
                     },
                 )
             )
+        logger.debug(
+            "[_normalise_mcp_results] Normalisation complete | rows_in=%d | evidence_out=%d",
+            len(rows) if isinstance(rows, list) else 0,
+            len(evidence),
+        )
         return evidence
 
 
