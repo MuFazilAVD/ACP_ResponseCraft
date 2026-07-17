@@ -38,11 +38,9 @@ DEFAULT_AGENT_PORT = 8110
 DEFAULT_DYNAMODB_REGION = "ap-south-1"
 DEFAULT_LLM_PROVIDER = "litellm"
 DEFAULT_LLM_BASE_URL = "https://d2brdeqy144bwg.cloudfront.net/myllm/v1/"
-DEFAULT_LLM_MODEL = "GLM-4.7-Flash"
-DEFAULT_LLM_USER = "AgentStudio"
-DEFAULT_MCP_PROPOSAL_KNOWLEDGE_URL = (
-    "https://d2brdeqy144bwg.cloudfront.net/poc185/acp-mcp/rd-mcp-server/tools/search_proposal_knowledge"
-)
+DEFAULT_LLM_MODEL = "gemini-2.5-flash-cto-lab"
+DEFAULT_LLM_USER = "ACP-ResponseCraft"
+DEFAULT_MCP_PROPOSAL_KNOWLEDGE_URL = "https://d2brdeqy144bwg.cloudfront.net/poc185/acp-mcp/rd-mcp-server/tools/search_proposal_knowledge"
 DEFAULT_MCP_PROPOSAL_KNOWLEDGE_TRANSPORT = "http_bridge"
 DEFAULT_MCP_PROPOSAL_KNOWLEDGE_TOOL = "search_proposal_knowledge"
 DEFAULT_LANGFUSE_BASE_URL = "http://172.16.1.224"
@@ -168,10 +166,7 @@ class AgentSettings:
     entitlement_scope: str = "node"
     framework: str = "langgraph"
     graph_nodes: tuple[str, ...] = (
-        "plan",
-        "reason",
-        "retrieve",
-        "act",
+        "llm_agent",
         "reflect",
         "render",
     )

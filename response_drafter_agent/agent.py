@@ -9,9 +9,8 @@ from typing import Any
 
 from fastapi import FastAPI, HTTPException
 
-from .governance import Constitution, classify_request_scope, infer_intent, redact_sensitive_text
+from .governance import Constitution, redact_sensitive_text
 from .graph import build_graph
-from .knowledge import KnowledgeRetriever
 from .langfuse_integration import LangfuseTelemetry, usage_details_from_token_usage
 from .llm import LLMClient
 from .logging_utils import get_logger, log_section_end, log_section_start
@@ -77,9 +76,6 @@ class ResponseDrafterAgent:
 
         logger.debug("[INIT] Initialising Constitution ...")
         self.constitution = Constitution(BASE_DIR / "config" / "constitution.yaml")
-
-        logger.debug("[INIT] Initialising KnowledgeRetriever ...")
-        self.knowledge = KnowledgeRetriever()
 
         logger.debug("[INIT] Initialising LLMClient | model=%s", self.settings.default_model)
         self.llm = LLMClient(default_model=self.settings.default_model)
@@ -172,7 +168,7 @@ class ResponseDrafterAgent:
             raise ValueError("context.force_mock is no longer supported; invoke uses live configured services only.")
 
         # requested_model = body.model_override or self.settings.default_model
-        requested_model = "GLM-4.7-Flash"
+        requested_model = "gemini-2.5-flash-cto-lab"
         redacted_query = redact_sensitive_text(body.query).strip()
         system_prompt_override = context.get("system_prompt_override")
         if system_prompt_override is not None:
@@ -273,6 +269,17 @@ class ResponseDrafterAgent:
                     "skills_loaded": self._skills_from_context(context),
                 }
 
+                logger.info(
+                    "[invoke] Generation configuration: %s",
+                    {
+                        "temperature": initial_state["temperature"],
+                        "top_p": initial_state["top_p"],
+                        "max_tokens": initial_state["max_tokens"],
+                        "frequency_penalty": initial_state["frequency_penalty"],
+                        "presence_penalty": initial_state["presence_penalty"],
+                        "seed": initial_state["seed"],
+                    },
+                )
                 logger.debug(
                     "[invoke] Initial state built | temperature=%s | max_tokens=%s | "
                     "top_p=%s | skills_loaded=%d",
@@ -291,7 +298,6 @@ class ResponseDrafterAgent:
                     if tool_calls_list:
                         # Use the first (and typically only) tool call for tracking.
                         tc = tool_calls_list[0]
-                        tool_arguments_latency = 0.0  # argument prep is sub-ms within the node
                         mcp_tool_latency = (tc.latency_ms or 0) / 1000.0
                         # retrieved_chunks: serialise evidence to a JSON string for DynamoDB
                         evidence_list = final_state.get("evidence", [])
@@ -307,7 +313,7 @@ class ResponseDrafterAgent:
                         ]
                         tracker.record_tool(
                             tool_arguments=tc.request if tc.request else {},
-                            tool_arguments_latency=tool_arguments_latency,
+                            # tool_arguments_latency=tool_arguments_latency,
                             retrieved_chunks=chunks_payload,
                             mcp_tool_latency=mcp_tool_latency,
                         )
@@ -405,250 +411,208 @@ class ResponseDrafterAgent:
     # Graph nodes
     # ------------------------------------------------------------------
 
-    async def plan_node(self, state: dict[str, Any]) -> dict[str, Any]:
+    async def llm_agent_node(self, state: dict[str, Any]) -> dict[str, Any]:
+        """LLM-driven agentic node.
+
+        The LLM receives the user query and a bound ``search_proposal_knowledge``
+        tool.  It reasons internally, decides whether to call the tool,
+        invokes it if needed, and produces the final draft answer.  All
+        deterministic intent/scope classification is removed from this path;
+        the LLM is responsible for that reasoning.
+        """
         logger.debug(
-            "[plan_node] Entering plan node | conversation_id=%s | trace_id=%s",
-            state.get("conversation_id"),
+            "[llm_agent_node] Entering LLM agent node | trace_id=%s | model=%s",
             state.get("trace_id"),
+            state.get("model"),
         )
+
+        prompt = self.prompts.resolve(
+            state["model"],
+            system_prompt_override=state.get("system_prompt_override"),
+        )
+
+        # ------------------------------------------------------------------
+        # PII redaction
+        # ------------------------------------------------------------------
+        question = redact_sensitive_text(state["query"]).strip()
+        state["question_for_model"] = question
+        # Stub intent label — used only in debug payloads; no longer classified.
+        state["intent"] = "llm_driven"
+
+        # ------------------------------------------------------------------
+        # Authority gate (deterministic — runs before the LLM)
+        # ------------------------------------------------------------------
         with self.telemetry.span(
-            "agent.plan",
+            "agent.authority_check",
             {
                 "gen_ai.operation.name": "agent.step",
-                "agent.node": "plan",
-            },
-            trace_id=state.get("trace_id"),
-        ):
-            question = redact_sensitive_text(state["query"]).strip()
-            intent = infer_intent(question)
-            scope = classify_request_scope(question, intent)
-            state["question_for_model"] = question
-            state["intent"] = intent
-            state["scope"] = scope
-
-            logger.info(
-                "[plan_node] Classification complete | intent=%s | scope_status=%s | "
-                "skip_retrieval=%s | skip_generation=%s | review_required=%s",
-                intent,
-                scope.get("scope_status"),
-                scope.get("skip_retrieval"),
-                scope.get("skip_generation"),
-                scope.get("review_required"),
-            )
-
-            if scope["scope_status"] == "in_scope":
-                state["plan"] = [
-                    "Classify RFP question intent.",
-                    "Retrieve approved knowledge.",
-                    "Draft a grounded answer for proposal-team review.",
-                    "Reflect for authority and grounding compliance.",
-                ]
-                logger.debug("[plan_node] In-scope plan set | steps=%d", len(state["plan"]))
-            else:
-                state["plan"] = [
-                    "Classify request scope.",
-                    "Return deterministic scoped response without retrieval or generation.",
-                ]
-                logger.debug(
-                    "[plan_node] Out-of-scope plan set | scope_status=%s | deterministic_answer_present=%s",
-                    scope["scope_status"],
-                    bool(scope.get("deterministic_answer")),
-                )
-
-        return state
-
-    async def reason_node(self, state: dict[str, Any]) -> dict[str, Any]:
-        logger.debug(
-            "[reason_node] Entering reason node | intent=%s | trace_id=%s",
-            state.get("intent"),
-            state.get("trace_id"),
-        )
-        with self.telemetry.span(
-            "agent.reason",
-            {
-                "gen_ai.operation.name": "agent.step",
-                "agent.node": "reason",
+                "agent.node": "llm_agent",
+                "agent.step": "authority_check",
             },
             trace_id=state.get("trace_id"),
         ):
             authority = self.constitution.evaluate_request(state["query"], state.get("context"))
-            scope = dict(state.get("scope") or classify_request_scope(state["question_for_model"], state["intent"]))
-
             logger.info(
-                "[reason_node] Authority evaluated | authority_status=%s | violations=%d",
+                "[llm_agent_node] Authority evaluated | authority_status=%s | violations=%d",
                 authority.get("authority_status"),
                 len(authority.get("violations", [])),
             )
 
-            if authority["authority_status"] == "prohibited":
-                logger.warning(
-                    "[reason_node] PROHIBITED authority detected | violations=%s | "
-                    "Overriding scope to skip retrieval and generation | trace_id=%s",
-                    [v.get("rule") for v in authority.get("violations", [])],
-                    state.get("trace_id"),
-                )
-                scope.update(
-                    {
-                        "scope_status": "prohibited_authority",
-                        "skip_retrieval": True,
-                        "skip_generation": True,
-                        "review_required": True,
-                        "deterministic_answer": (
-                            "I cannot draft pricing, legal, contractual, warranty, final-approval, "
-                            "or proposal-submission commitments. Please route this request to the "
-                            "proposal owner or the accountable SME."
-                        ),
-                        "limitations": [
-                            "Request asks for authority outside the response drafter charter; retrieval was not performed."
-                        ],
-                    }
-                )
-            elif scope.get("scope_status") == "outside_agent_scope":
-                logger.warning(
-                    "[reason_node] Request is outside agent scope | scope_status=%s | trace_id=%s",
-                    scope.get("scope_status"),
-                    state.get("trace_id"),
-                )
-                authority = {
-                    **authority,
-                    "authority_status": "outside_agent_scope",
-                    "violations": [
-                        *authority.get("violations", []),
-                        {
-                            "rule": "agent_scope",
-                            "severity": "low",
-                            "message": "The request is outside the RFP response drafter scope.",
-                        },
-                    ],
-                    "proposal_review_required": False,
-                }
-            else:
-                logger.debug(
-                    "[reason_node] Authority within bounds | authority_status=%s",
-                    authority.get("authority_status"),
-                )
+        # Default scope for render_node compatibility.
+        scope: dict[str, Any] = {
+            "scope_status": "in_scope",
+            "skip_retrieval": False,
+            "skip_generation": False,
+            "review_required": True,
+            "limitations": [],
+        }
 
+        if authority["authority_status"] == "prohibited":
+            logger.warning(
+                "[llm_agent_node] PROHIBITED request — skipping LLM | violations=%s | trace_id=%s",
+                [v.get("rule") for v in authority.get("violations", [])],
+                state.get("trace_id"),
+            )
+            prohibited_answer = (
+                "I cannot draft pricing, legal, contractual, warranty, final-approval, "
+                "or proposal-submission commitments. Please route this request to the "
+                "proposal owner or the accountable SME."
+            )
+            scope.update(
+                {
+                    "scope_status": "prohibited_authority",
+                    "skip_generation": True,
+                    "review_required": True,
+                    "limitations": [
+                        "Request asks for authority outside the response drafter charter."
+                    ],
+                }
+            )
             state["authority"] = authority
             state["scope"] = scope
-            state["information_needs"] = _information_needs_for_intent(state["intent"])
+            state["prompt_resolution"] = prompt
+            state["grounding"] = {"grounding_status": "not_applicable", "limitations": scope["limitations"]}
+            state["draft_answer"] = prohibited_answer
+            state["evidence"] = []
+            state["model_used"] = state["model"]
+            state["token_usage"] = TokenUsage(input_tokens=0, output_tokens=0, total_tokens=0)
+            return state
 
-            logger.debug(
-                "[reason_node] Information needs resolved | intent=%s | needs=%s",
-                state["intent"],
-                state["information_needs"],
-            )
+        state["authority"] = authority
+        state["scope"] = scope
 
-        return state
+        # ------------------------------------------------------------------
+        # LLM agentic loop (with tool-calling)
+        # ------------------------------------------------------------------
+        generation_params = {
+            "temperature": state.get("temperature"),
+            "top_p": state.get("top_p"),
+            "max_tokens": state.get("max_tokens"),
+            "frequency_penalty": state.get("frequency_penalty"),
+            "presence_penalty": state.get("presence_penalty"),
+            "seed": state.get("seed"),
+        }
 
-    async def retrieve_node(self, state: dict[str, Any]) -> dict[str, Any]:
-        logger.debug(
-            "[retrieve_node] Entering retrieve node | trace_id=%s",
+        logger.info(
+            "[llm_agent_node] Launching LLM agent loop | model=%s | prompt_source=%s | "
+            "prompt_variant=%s | temperature=%s | max_tokens=%s | trace_id=%s",
+            state["model"],
+            prompt.source,
+            prompt.prompt_variant,
+            generation_params["temperature"],
+            generation_params["max_tokens"],
             state.get("trace_id"),
         )
+
         with self.telemetry.span(
-            "agent.retrieve",
+            "agent.llm_agent",
             {
-                "gen_ai.operation.name": "retrieval",
-                "agent.node": "retrieve",
-                "gen_ai.system": "mcp",
+                "gen_ai.operation.name": "chat",
+                "agent.node": "llm_agent",
+                "gen_ai.system": "llm_gateway",
+                "gen_ai.request.model": state["model"],
+                "gen_ai.request.temperature": generation_params["temperature"],
+                "gen_ai.request.max_tokens": generation_params["max_tokens"],
             },
             trace_id=state.get("trace_id"),
         ) as span:
-            if state.get("scope", {}).get("skip_retrieval"):
-                skip_reason = state.get("scope", {}).get("scope_status")
-                span.set_attribute("retrieval.skipped", True)
-                span.set_attribute("retrieval.skip_reason", skip_reason)
-                logger.info(
-                    "[retrieve_node] Retrieval skipped | reason=%s | trace_id=%s",
-                    skip_reason,
-                    state.get("trace_id"),
+            with self.langfuse.observation(
+                name="responsecraft-llm-agent",
+                as_type="generation",
+                input={
+                    "question": question,
+                    "prompt_name": prompt.prompt_name,
+                    "prompt_variant": prompt.prompt_variant,
+                },
+                model=state["model"],
+                model_parameters={
+                    key: value
+                    for key, value in generation_params.items()
+                    if value is not None
+                },
+                metadata={
+                    "prompt_source": prompt.source,
+                    "authority_status": authority["authority_status"],
+                },
+            ) as langfuse_generation:
+                draft, model_used, usage, evidence, agent_tool_calls = await self.llm.run_agent(
+                    query=question,
+                    prompt=prompt,
+                    model=state["model"],
+                    generation_params=generation_params,
                 )
-                state["evidence"] = []
-                return state
+                draft = _extract_draft_answer_text(draft)
+                if not draft.strip():
+                    logger.warning(
+                        "[llm_agent_node] LLM returned empty draft — using evidence fallback | "
+                        "model_used=%s | trace_id=%s",
+                        model_used,
+                        state.get("trace_id"),
+                    )
+                    grounding = self.constitution.evaluate_grounding(evidence)
+                    draft = _fallback_answer_from_evidence(evidence, grounding)
+                langfuse_generation.update(
+                    output=draft,
+                    model=model_used,
+                    usage_details=usage_details_from_token_usage(usage),
+                )
 
-            logger.info(
-                "[retrieve_node] Calling knowledge retriever | intent=%s | top_k=5 | trace_id=%s",
-                state.get("intent"),
-                state.get("trace_id"),
-            )
-
-            evidence, tool_call = await self.knowledge.retrieve(
-                state["question_for_model"],
-                top_k=5,
-                filters={"intent": state["intent"]},
-            )
-
+            span.set_attribute("gen_ai.response.model", model_used)
+            span.set_attribute("gen_ai.usage.input_tokens", usage.input_tokens)
+            span.set_attribute("gen_ai.usage.output_tokens", usage.output_tokens)
             span.set_attribute("retrieval.result_count", len(evidence))
-            span.set_attribute("tool.name", tool_call.tool_name)
-            span.set_attribute("tool.status", tool_call.status)
-            state["evidence"] = evidence
-            state["tool_calls"] = [*state.get("tool_calls", []), tool_call]
+            span.set_attribute("tool.calls_count", len(agent_tool_calls))
 
-            logger.info(
-                "[retrieve_node] Retrieval complete | tool=%s | status=%s | "
-                "evidence_count=%d | latency_ms=%d | target=%s | evidence=\n%s",
-                tool_call.tool_name,
-                tool_call.status,
-                len(evidence),
-                tool_call.latency_ms,
-                tool_call.target,
-                json.dumps([{"source_id": item.source_id, "content": item.content} for item in evidence], ensure_ascii=False, default=str),
-            )
+        grounding = self.constitution.evaluate_grounding(evidence)
 
-            if evidence:
-                logger.debug(
-                    "[retrieve_node] Evidence sources retrieved | sources=%s | scores=%s",
-                    [item.source_id for item in evidence],
-                    [round(item.score, 3) for item in evidence],
-                )
+        logger.info(
+            "[llm_agent_node] Agent loop complete | model_used=%s | input_tokens=%s | "
+            "output_tokens=%s | evidence_count=%d | tool_calls=%d | "
+            "grounding_status=%s | draft_len=%d | trace_id=%s",
+            model_used,
+            usage.input_tokens,
+            usage.output_tokens,
+            len(evidence),
+            len(agent_tool_calls),
+            grounding.get("grounding_status"),
+            len(draft),
+            state.get("trace_id"),
+        )
 
-            # Structured log of full tool output (replaces the old print()).
+        if evidence:
             logger.debug(
-                "[retrieve_node] Tool output detail | %s",
-                json.dumps(
-                    {
-                        "trace_id": state.get("trace_id"),
-                        "tool_name": tool_call.tool_name,
-                        "status": tool_call.status,
-                        "target": tool_call.target,
-                        "latency_ms": tool_call.latency_ms,
-                        "error": tool_call.error,
-                        "evidence": [
-                            {
-                                "source_id": item.source_id,
-                                "title": item.title,
-                                "score": item.score,
-                                "content": item.content[:200],
-                                "metadata": item.metadata,
-                            }
-                            for item in evidence
-                        ],
-                    },
-                    ensure_ascii=True,
-                    default=str,
-                ),
+                "[llm_agent_node] Evidence sources | sources=%s | scores=%s",
+                [item.source_id for item in evidence],
+                [round(item.score, 3) for item in evidence],
             )
 
-            if tool_call.status != "success":
-                logger.error(
-                    "[retrieve_node] Tool call FAILED | tool=%s | error=%s | "
-                    "source=%s | target=%s | trace_id=%s",
-                    tool_call.tool_name,
-                    tool_call.error,
-                    tool_call.source,
-                    tool_call.target,
-                    state.get("trace_id"),
-                )
-                state["system_errors"] = [
-                    *state.get("system_errors", []),
-                    {
-                        "component": "proposal_knowledge_retrieval",
-                        "tool": tool_call.tool_name,
-                        "source": tool_call.source,
-                        "target": tool_call.target,
-                        "error": tool_call.error or "unknown_error",
-                    },
-                ]
+        state["prompt_resolution"] = prompt
+        state["grounding"] = grounding
+        state["draft_answer"] = draft
+        state["model_used"] = model_used
+        state["token_usage"] = usage
+        state["evidence"] = evidence
+        state["tool_calls"] = [*state.get("tool_calls", []), *agent_tool_calls]
         return state
 
     async def act_node(self, state: dict[str, Any]) -> dict[str, Any]:
@@ -954,36 +918,6 @@ class ResponseDrafterAgent:
 # ---------------------------------------------------------------------------
 # Module-level helpers
 # ---------------------------------------------------------------------------
-
-def _information_needs_for_intent(intent: str) -> list[str]:
-    needs = {
-        "security_and_compliance": [
-            "security controls",
-            "compliance attestations",
-            "data protection practices",
-        ],
-        "delivery_methodology": [
-            "delivery lifecycle",
-            "governance model",
-            "transition approach",
-        ],
-        "business_continuity": [
-            "resilience practices",
-            "continuity planning",
-            "disaster recovery governance",
-        ],
-        "staffing_and_resourcing": [
-            "role model",
-            "skills and staffing approach",
-            "knowledge transfer",
-        ],
-        "solution_architecture": [
-            "reference architecture",
-            "technology capabilities",
-            "implementation approach",
-        ],
-    }
-    return needs.get(intent, ["approved capability description", "proposal-safe differentiators"])
 
 
 def _extract_draft_answer_text(raw_text: str) -> str:

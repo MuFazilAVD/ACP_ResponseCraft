@@ -28,7 +28,7 @@ Copy-Item .env.example .env
 
 The `.env` file is intentionally keys-only and is loaded by the app on startup with an allow-list. Runtime defaults such as model names, URLs, prompt labels, transports, and generation settings are tracked in `response_drafter_agent/settings.py` so config migrations are visible in git. Non-key entries left in `.env` are ignored.
 
-The default LLM is `GLM-4.7-Flash` through `https://d2brdeqy144bwg.cloudfront.net/myllm/v1/` with request user `AgentStudio`. Add `LLM_API_KEY` or `OPENAI_API_KEY` for live LLM testing. Runtime mock LLM responses are not supported.
+The default LLM is `gemini-2.5-flash-cto-lab` through `https://d2brdeqy144bwg.cloudfront.net/myllm/v1/` with request user `AgentStudio`. Add `LLM_API_KEY` or `OPENAI_API_KEY` for live LLM testing. Runtime mock LLM responses are not supported.
 
 ## Run
 

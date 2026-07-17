@@ -146,7 +146,6 @@ class InvokeTracker:
         self,
         *,
         tool_arguments: dict[str, Any],
-        tool_arguments_latency: float,
         retrieved_chunks: Any,
         mcp_tool_latency: float,
     ) -> None:
@@ -156,8 +155,6 @@ class InvokeTracker:
         ----------
         tool_arguments:
             The arguments that were passed to the MCP tool.
-        tool_arguments_latency:
-            Time (in seconds) taken to prepare/resolve the tool arguments.
         retrieved_chunks:
             The response payload returned by the MCP tool (serialisable object).
         mcp_tool_latency:
@@ -168,9 +165,8 @@ class InvokeTracker:
 
         logger.info(
             "[InvokeTracker.record_tool] Updating DynamoDB item with tool call details | "
-            "invoke_id=%s | tool_arguments_latency=%.3fs | mcp_tool_latency=%.3fs",
+            "invoke_id=%s | mcp_tool_latency=%.3fs",
             self.invoke_id,
-            tool_arguments_latency,
             mcp_tool_latency,
         )
         logger.debug(
@@ -194,14 +190,14 @@ class InvokeTracker:
                 UpdateExpression=(
                     "SET tool_call = :tc, "
                     "tool_arguments = :ta, "
-                    "tool_arguments_latency = :tal, "
+                    # "tool_arguments_latency = :tal, "
                     "retrieved_chunks = :rc, "
                     "mcp_tool_latency = :mtl"
                 ),
                 ExpressionAttributeValues={
                     ":tc": True,
                     ":ta": tool_arguments,
-                    ":tal": str(round(tool_arguments_latency, 4)),
+                    # ":tal": str(round(tool_arguments_latency, 4)),
                     ":rc": chunks_value,
                     ":mtl": str(round(mcp_tool_latency, 4)),
                 },

@@ -1,4 +1,4 @@
-"""LangGraph-compatible Plan-Reason-Act-Reflect graph."""
+"""LangGraph-compatible LLM-driven 3-node graph."""
 
 from __future__ import annotations
 
@@ -16,10 +16,7 @@ class SequentialGraph:
 
     async def ainvoke(self, state: dict[str, Any]) -> dict[str, Any]:
         for node in (
-            self.agent.plan_node,
-            self.agent.reason_node,
-            self.agent.retrieve_node,
-            self.agent.act_node,
+            self.agent.llm_agent_node,
             self.agent.reflect_node,
             self.agent.render_node,
         ):
@@ -34,17 +31,12 @@ def build_graph(agent: Any) -> InvokableGraph:
         return SequentialGraph(agent)
 
     graph = StateGraph(dict)
-    graph.add_node("plan", agent.plan_node)
-    graph.add_node("reason", agent.reason_node)
-    graph.add_node("retrieve", agent.retrieve_node)
-    graph.add_node("act", agent.act_node)
+    graph.add_node("llm_agent", agent.llm_agent_node)
     graph.add_node("reflect", agent.reflect_node)
     graph.add_node("render", agent.render_node)
-    graph.add_edge(START, "plan")
-    graph.add_edge("plan", "reason")
-    graph.add_edge("reason", "retrieve")
-    graph.add_edge("retrieve", "act")
-    graph.add_edge("act", "reflect")
+    graph.add_edge(START, "llm_agent")
+    graph.add_edge("llm_agent", "reflect")
     graph.add_edge("reflect", "render")
     graph.add_edge("render", END)
     return graph.compile()
+

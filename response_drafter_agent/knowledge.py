@@ -10,6 +10,8 @@ from typing import Any
 
 import httpx
 
+from langchain_core.tools import tool # type: ignore[assignment]
+
 from .logging_utils import get_logger
 from .schemas import ToolCall
 from .settings import (
@@ -358,3 +360,61 @@ def _extract_mcp_content(data: dict[str, Any]) -> Any:
             except json.JSONDecodeError:
                 return {"results": [{"source_id": "mcp-text", "content": joined}]}
     return data
+
+# ---------------------------------------------------------------------------
+# LangChain @tool adapter — bound to the LLM for native tool-calling
+# ---------------------------------------------------------------------------
+
+# Module-level singleton so the tool closure does not re-instantiate on each call.
+_retriever: KnowledgeRetriever | None = None
+
+
+def _get_retriever() -> KnowledgeRetriever:
+    global _retriever
+    if _retriever is None:
+        _retriever = KnowledgeRetriever()
+    return _retriever
+
+
+@tool
+async def search_proposal_knowledge(query: str) -> str:
+    """Search the TCS proposal knowledge base for approved content.
+
+    Use this tool whenever the user's question requires factual, approved
+    TCS proposal content — such as capabilities, security posture,
+    delivery methodology, staffing approach, or solution architecture.
+    Pass the user's question (or a refined version of it) as *query*.
+    The tool returns a JSON array of matching knowledge chunks with
+    source_id, title, content, and relevance score.
+
+    Args:
+        query: The search query to retrieve relevant proposal knowledge.
+               Only this field is required.
+
+    Returns:
+        A JSON string containing a list of evidence items, each with
+        ``source_id``, ``title``, ``content``, and ``score`` fields.
+    """
+    retriever = _get_retriever()
+    logger.info(
+        "[search_proposal_knowledge] LLM-invoked tool call | query_len=%d",
+        len(query),
+    )
+    evidence, tool_call = await retriever.retrieve(query, top_k=5)
+    logger.info(
+        "[search_proposal_knowledge] Tool call complete | status=%s | evidence_count=%d | latency_ms=%d",
+        tool_call.status,
+        len(evidence),
+        tool_call.latency_ms,
+    )
+    results = [
+        {
+            "source_id": item.source_id,
+            "title": item.title,
+            "content": item.content,
+            "score": item.score,
+        }
+        for item in evidence
+    ]
+    return json.dumps(results, ensure_ascii=True)
+

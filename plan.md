@@ -69,7 +69,7 @@ Runtime local mock retrieval is disabled. Production and pre-production must reg
 
 ## LLM Default
 
-- Standard default model: `GLM-4.7-Flash`.
+- Standard default model: `gemini-2.5-flash-cto-lab`.
 - Standard gateway: `https://d2brdeqy144bwg.cloudfront.net/myllm/v1/`.
 - Runtime adapter: `langchain_openai.ChatOpenAI` with `extra_body={"user": "AgentStudio"}`.
 - Runtime mock LLM responses are disabled; LLM errors surface as invoke failures.

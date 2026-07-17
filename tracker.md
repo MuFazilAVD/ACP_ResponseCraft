@@ -28,7 +28,7 @@
 ## Conformance Checklist
 
 - [ ] AEI endpoints `/health`, `/config`, `/invoke`, `/prompts/sync` implemented, but `/invoke` currently uses an answer-only body rather than the full AEI metadata envelope required for formal ACP conformance.
-- [ ] `/invoke` passes `context.system_prompt_override` and generation overrides through; `model_override` remains disabled while invoke hardcodes `GLM-4.7-Flash`.
+- [ ] `/invoke` passes `context.system_prompt_override` and generation overrides through; `model_override` remains disabled while invoke hardcodes `gemini-2.5-flash-cto-lab`.
 - [x] `/config` reports default generation parameters.
 - [x] `requested_entitlements` and `entitlement_scope` declared.
 - [x] Governance charter declared with LOB, accountable IdP role, action classes, risk tiers, and oversight.
@@ -41,7 +41,7 @@
 
 ## Resolved Gaps
 
-- [x] Standard LiteLLM-compatible Gemini default is wired via `langchain_openai.ChatOpenAI` (`GLM-4.7-Flash`, `https://d2brdeqy144bwg.cloudfront.net/myllm/v1/`, request user `AgentStudio`). Operators only need `LLM_API_KEY`/`OPENAI_API_KEY` if the gateway requires authentication.
+- [x] Standard LiteLLM-compatible Gemini default is wired via `langchain_openai.ChatOpenAI` (`gemini-2.5-flash-cto-lab`, `https://d2brdeqy144bwg.cloudfront.net/myllm/v1/`, request user `AgentStudio`). Operators only need `LLM_API_KEY`/`OPENAI_API_KEY` if the gateway requires authentication.
 - [x] Langfuse v4 integration is wired for PromptHub sync, `auth_check()` on sync, root `responsecraft-agent` observations, nested `responsecraft-generate` observations, trace IO, error status, and flush. Default host is `http://172.16.1.224`; secrets remain environment-only.
 - [x] Contract-test `proposal-knowledge-mcp` server is implemented as an independent unit under `rd-mcp-server/` with a `search_proposal_knowledge` tool over Streamable HTTP plus a compatibility bridge. The server owns `rd-mcp-server/knowledge/mock_knowledge.json`, `requirements.txt`, `start-rd-mcp.sh`, and `rd-mcp-server.service.example`; runtime invoke rejects evidence marked as mock.
 - [x] Hosted bridge endpoint is wired as the default response drafter retrieval tool: `https://d2brdeqy144bwg.cloudfront.net/poc185/acp-mcp/rd-mcp-server/tools/search_proposal_knowledge`. The agent sends the `/contract` `input.query` body over `http_bridge`, and the retrieval layer records the call as `source: "mcp"`.
@@ -93,7 +93,7 @@
 - [ ] Launch ACP readiness/certification against `proposal_management.rfp.response_drafting`.
 - [ ] Re-run local tests and the conformance checklist after any platform-driven prompt, model, entitlement, governance, or tool change.
 - [ ] Restore the full AEI `/invoke` metadata envelope, or add an ACP-compatible adapter, before formal ACP registration/readiness/certification.
-- [ ] Resolve the current `model_override` contract mismatch, or document the service as intentionally fixed to `GLM-4.7-Flash`.
+- [ ] Resolve the current `model_override` contract mismatch, or document the service as intentionally fixed to `gemini-2.5-flash-cto-lab`.
 
 ## Known External Gaps
 

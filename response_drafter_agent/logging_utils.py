@@ -81,7 +81,7 @@ def log_section_start(logger: logging.Logger, title: str, **fields: Any) -> None
     Example output::
 
         ================================================================================
-         INVOKE START | conversation_id=abc-123 | model=GLM-4.7-Flash
+         INVOKE START | conversation_id=abc-123 | model=gemini-2.5-flash-cto-lab
         ================================================================================
     """
     line = _DIVIDER_CHAR * _DIVIDER_WIDTH
